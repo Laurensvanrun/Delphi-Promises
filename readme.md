@@ -261,8 +261,4 @@ This approach simplifies managing asynchronous operations by encapsulating them 
 
 ## License
 
-This project is licensed under the GNU General Public License (GPL), allowing you to freely use, modify, and distribute it under the GPL's terms.
-
----
-
-This README is a starting point and may need adjustments based on the specific details of your implementation and any additional features or instructions you wish to include.
+This project is licensed under the MIT License - see the LICENSE file for details.
