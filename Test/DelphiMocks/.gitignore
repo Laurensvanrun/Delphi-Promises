@@ -1,0 +1,49 @@
+# Compiled source #
+###################
+*.dcu
+*.obj
+*.exe
+*.mes
+*.res
+
+# Backup files    #
+###################
+*.~*
+
+# IDE Files	  #
+###################
+*.dproj.local
+*.groupproj.local
+*.identcache
+*.dsk
+*.tvsconfig
+*.projdata
+
+# Output Folders  #
+###################
+/Win32
+/Win64
+/Tests/Win32
+/Tests/Win64
+/Examples/Win32
+/Examples/Win64
+
+Build/TestAndBuild.fb7lck
+*.fbl7
+*.fbpInf
+*.rc
+*.drc
+*.map
+=======
+__history/**
+**.exe
+**.dcu
+*.local
+*.identcache
+*.xml
+*.fb8lck
+*.fbl8
+*.fbpbrk
+Tests/Delphi.Mocks.Tests.res
+Tests/Delphi.Mocks.Tests.res
+*.rsm
