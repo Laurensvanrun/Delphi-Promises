@@ -27,9 +27,14 @@ type
     [Test] procedure DisposeArrayShouldDisposeItemsInArrayIfOtherIsEmptyArray;
     [Test] procedure DisposeArrayShouldNotDisposeItemIfOneItemIsTheOnlyInOther;
     [Test] procedure DisposeSameObjectOfDifferentTypeShouldNotDisposeIt;
+    [Test] procedure DisposeSameObjectReferencedByInterfaceShouldNotDisposeIt;
   end;
 
-  TClassToDisposeOrNot = class(TObject)
+  IInterfaceToDisposeOrNot = interface
+  ['{06DAEC82-438B-4843-B794-C86B70EDA9B6}']
+  end;
+
+  TClassToDisposeOrNot = class(TInterfacedObject, IInterfaceToDisposeOrNot)
   private
     FName: String;
   public
@@ -333,6 +338,28 @@ begin
   finally
     LValue.Dispose;
   end;
+end;
+
+procedure TTestDisposableValue.DisposeSameObjectReferencedByInterfaceShouldNotDisposeIt;
+var
+  [weak] refToCheckDisposedObject: IInterfaceToDisposeOrNot;
+begin
+  var o1 := TClassToDisposeOrNot.Create('test');
+  refToCheckDisposedObject := o1;
+  var LValue: TDisposableValue<TClassToDisposeOrNot> := o1;
+  try
+    var i1: IInterfaceToDisposeOrNot := o1;
+    LValue.TryDispose<IInterfaceToDisposeOrNot>(i1);
+    Assert.IsNull(TObject(LValue));
+    Assert.IsNotNull(i1);
+    Assert.IsNotNull(o1);
+    Assert.IsNotNull(refToCheckDisposedObject);
+  finally
+    LValue.Dispose;
+  end;
+
+  //Test outside the scope to verify that the object is destroyed
+  Assert.IsNull(refToCheckDisposedObject);
 end;
 
 procedure TTestDisposableValue.New;

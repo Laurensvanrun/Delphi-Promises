@@ -174,8 +174,16 @@ end;
 procedure TDisposableValue<T>.TryDisposeObject<T2>(const AOther: T2);
 type
   PObject = ^TObject;
+  PIntf = ^IInterface;
 begin
-  if PObject(@FValue)^ <> PObject(@AOther)^ then
+  if (GetTypeKind(T2) = tkInterface) then begin
+    var LIntf := (PIntf(@AOther)^ as IInterface);
+    var LObj := LIntf as TObject;
+    if (PObject(@FValue)^ <> PObject(@LObj)^) then
+      DisposeP(FValue)
+    else
+      NilP(FValue);
+  end else if (PObject(@FValue)^ <> PObject(@AOther)^) then
     DisposeP(FValue);
 end;
 
