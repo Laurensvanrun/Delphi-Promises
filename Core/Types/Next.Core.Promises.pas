@@ -87,6 +87,7 @@ type
   end;
 
   IPromise<T> = interface(IPromiseAccess)
+  ['{300D57D7-1A48-47D7-8C98-ADFCE66B9575}']
     function ThenBy(AFunc: TConstFunc<T, T>; ADispose: TDisposeValue = TDisposeValue.dvFree): IPromise<T>; overload;
     function ThenBy(AFunc: TConstFunc<T, IPromise<T>>; ADispose: TDisposeValue = TDisposeValue.dvFree): IPromise<T>; overload;
     function ThenBy(AProc: TConstProc<T>): IPromise<T>; overload;
@@ -161,6 +162,7 @@ type
     property State: TPromiseState read GetState;
   end;
 
+  //Special case: first promise in a row just returns the value of the anonymous
   TFirstPromise<T> = class(TAbstractPromise<T>)
     FFunc: TFunc<T>;
 
@@ -182,6 +184,41 @@ type
     function GetPreviousPromiseState: TPromiseState; override;
   public
     constructor Create(AFunc: TConstFunc<T, T2>; ACatchFunc: TFunc<Exception, T2>; APreviousPromise: IPromise<T>; ADispose: TDisposeValue); reintroduce;
+  end;
+
+  //Special case: if the previous promise returns a promise we have to wait
+  //until that promise is resolved. When we execute the "extraction" (see
+  //TPromiseInPromise) we have to compare the result value to the input value
+  //for the memory management. Therefore we need a special type that saves a
+  //copy of the input type for comparison.
+  IPromiseKeepInputValue<T> = interface(IPromise<IPromiseAccess>)
+    function GetInputValue: T;
+  end;
+
+  TPromiseKeepInputValue<T> = class(TPromise<T, IPromiseAccess>, IPromiseKeepInputValue<T>)
+  private
+    FPreviousValue: T;
+
+    procedure SetInputValue(AValue: T);
+    function GetInputValue: T;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AFunc: TConstFunc<T, IPromiseAccess>; ACatchFunc: TFunc<Exception, IPromiseAccess>; APreviousPromise: IPromise<T>); reintroduce;
+  end;
+
+  //Special case: if the previous promise returns a promise we have to wait
+  //until that promise is resolved. Another option would be to Await in the
+  //anonymous caller, but that could cause deadlocks.
+  TPromiseInPromise<T, T2> = class(TAbstractPromise<T2>)
+  private
+    FDispose: TDisposeValue;
+    FPreviousPromise: IPromiseKeepInputValue<T>;
+  protected
+    procedure Execute; override;
+    function GetPreviousPromiseState: TPromiseState; override;
+  public
+    constructor Create(APreviousPromise: IPromiseKeepInputValue<T>; ADispose: TDisposeValue); reintroduce;
   end;
 {$ENDREGION}
 
@@ -331,12 +368,24 @@ begin
 end;
 
 function TAbstractPromise<T>.Catch(AFunc: TFunc<Exception, IPromise<T>>): IPromise<T>;
+var
+  LFirst: IPromiseKeepInputValue<T>;
 begin
-  Result := TPromise<T, T>.Create(function(const AIn: T): T begin
-    Result := AIn end
-    , function(E: Exception): T begin
-      Result := AFunc(E).Await;
-    end, Self, TDisposeValue.dvFree);
+  LFirst := TPromiseKeepInputValue<T>.Create(function(const A: T): IPromiseAccess
+    begin
+      Result := Promise.Resolve<T>(function: T
+        begin
+          Result := A
+        end);
+    end,
+    function(E: Exception): IPromiseAccess
+      begin
+        Result := AFunc(E);
+      end,
+    Self);
+  _Scheduler.Schedule(LFirst);
+
+  Result := TPromiseInPromise<T, T>.Create(LFirst, TDisposeValue.dvFree);
   _Scheduler.Schedule(Result);
 end;
 
@@ -531,11 +580,17 @@ begin
 end;
 
 function TAbstractPromise<T>.ThenBy(AFunc: TConstFunc<T, IPromise<T>>; ADispose: TDisposeValue = TDisposeValue.dvFree): IPromise<T>;
+var
+  LFirst: IPromiseKeepInputValue<T>;
 begin
-  Result := TPromise<T, T>.Create(function(const A: T): T
+  LFirst := TPromiseKeepInputValue<T>.Create(function(const A: T): IPromiseAccess
     begin
-      Result := AFunc(A).Await;
-    end, nil, Self, ADispose);
+      Result := AFunc(A);
+    end,
+    nil, Self);
+  _Scheduler.Schedule(LFirst);
+
+  Result := TPromiseInPromise<T, T>.Create(LFirst, ADispose);
   _Scheduler.Schedule(Result);
 end;
 
@@ -564,10 +619,17 @@ begin
 end;
 
 function TPromiseOp<T>.ThenBy<T2>(AFunc: TConstFunc<T, IPromise<T2>>; ADispose: TDisposeValue = TDisposeValue.dvFree): IPromise<T2>;
+var
+  LFirst: IPromiseKeepInputValue<T>;
 begin
-  Result := TPromise<T,T2>.Create(function(const AArgument: T): T2 begin
-    Result := AFunc(AArgument).Await;
-  end, nil, FPromise, ADispose);
+  LFirst := TPromiseKeepInputValue<T>.Create(function(const A: T): IPromiseAccess
+    begin
+      Result := AFunc(A);
+    end,
+    nil, FPromise);
+  _Scheduler.Schedule(LFirst);
+
+  Result := TPromiseInPromise<T, T2>.Create(LFirst, ADispose);
   _Scheduler.Schedule(Result);
 end;
 
@@ -646,7 +708,7 @@ begin
   FCatchFunc := ACatchFunc;
   FPreviousPromise := APreviousPromise;
   FDispose := ADispose;
-{$IFDEF DEBUG}  
+{$IFDEF DEBUG}
   FPreviousPromiseNo := APreviousPromise.PromiseNo;
 {$ENDIF}
 
@@ -746,6 +808,53 @@ end;
 function TFirstPromise<T>.GetPreviousPromiseState: TPromiseState;
 begin
   Result := psFullfilled;
+end;
+
+{ TPromiseInPromise<T> }
+
+constructor TPromiseInPromise<T, T2>.Create(APreviousPromise: IPromiseKeepInputValue<T>; ADispose: TDisposeValue);
+begin
+  Assert(Assigned(APreviousPromise));
+  FPreviousPromise := APreviousPromise;
+  FDispose := ADispose;
+
+  inherited Create;
+end;
+
+procedure TPromiseInPromise<T, T2>.Execute;
+begin
+  InternalExecute(function: TDisposableValue<T2>
+    var
+      LValue: TDisposableValue<T>;
+      LResult: T2;
+    begin
+      try
+        LValue := FPreviousPromise.GetInputValue;
+        try
+          LResult := FPreviousPromise.Await.GetValueAsTValue.AsType<T2>;
+          Result := LResult;
+        finally
+          case FDispose of
+            dvFree: LValue.TryDispose<T2>(LResult);
+            dvAssign: Result.&Nil;
+            dvKeep: LValue.&Nil;
+          end;
+        end;
+      except
+        on E: EDisposableValueException do begin
+          E.Message := E.Message + ' (PreviousPromise state: ' + GetEnumName(TypeInfo(TPromiseState), Ord(FPreviousPromise.State)) + ')';
+
+          raise;
+        end;
+      end
+    end);
+end;
+
+function TPromiseInPromise<T, T2>.GetPreviousPromiseState: TPromiseState;
+begin
+  Result := FPreviousPromise.State;
+  if FPreviousPromise.State = psFullfilled then
+    Result := FPreviousPromise.Await.State;
 end;
 
 { TPromiseScheduler }
@@ -938,17 +1047,24 @@ end;
 { TPromiseMain<T> }
 
 function TPromiseMain<T>.Catch(AFunc: TFunc<Exception, IPromise<T>>): IPromise<T>;
+var
+  LFirst: IPromiseKeepInputValue<T>;
 begin
-  Result := TPromise<T, T>.Create(
-    function(const AIn: T): T
+  LFirst := TPromiseKeepInputValue<T>.Create(function(const A: T): IPromiseAccess
     begin
-      Result := AIn
+      Result := Promise.Resolve<T>(function: T
+        begin
+          Result := A
+        end);
     end,
+    function(E: Exception): IPromiseAccess
+      begin
+        Result := InternalCatch<IPromise<T>>(AFunc, E);
+      end,
+    FPromise);
+  _Scheduler.Schedule(LFirst);
 
-    function(E: Exception): T
-    begin
-      Result := InternalCatch<IPromise<T>>(AFunc, E).Await;
-    end, FPromise, TDisposeValue.dvFree);
+  Result := TPromiseInPromise<T, T>.Create(LFirst, TDisposeValue.dvFree);
   _Scheduler.Schedule(Result);
 end;
 
@@ -1109,10 +1225,17 @@ end;
 
 function TPromiseMain<T>.ThenBy<T2>(AFunc: TConstFunc<T, IPromise<T2>>;
   ADispose: TDisposeValue): IPromise<T2>;
+var
+  LFirst: IPromiseKeepInputValue<T>;
 begin
-  Result := TPromise<T, T2>.Create(function(const A: T): T2 begin
-    Result := InternalThenBy<IPromise<T2>>(AFunc, A).Await;
-  end, nil, FPromise, ADispose);
+  LFirst := TPromiseKeepInputValue<T>.Create(function(const A: T): IPromiseAccess
+    begin
+      Result := InternalThenBy<IPromise<T2>>(AFunc, A);
+    end,
+    nil, FPromise);
+  _Scheduler.Schedule(LFirst);
+
+  Result := TPromiseInPromise<T, T2>.Create(LFirst, ADispose);
   _Scheduler.Schedule(Result);
 end;
 
@@ -1184,6 +1307,61 @@ begin
       on E: Exception do
         FScheduler.LogFatalException(LPromiseClassName, E);
     end;
+  end;
+end;
+
+{ TPromiseKeepInputValue<T> }
+
+constructor TPromiseKeepInputValue<T>.Create(AFunc: TConstFunc<T, IPromiseAccess>;
+  ACatchFunc: TFunc<Exception, IPromiseAccess>;
+  APreviousPromise: IPromise<T>);
+begin
+  //DisposeValue is not used here in .Execute
+  inherited Create(AFunc, ACatchFunc, APreviousPromise, TDisposeValue.dvKeep);
+end;
+
+procedure TPromiseKeepInputValue<T>.Execute;
+begin
+  if GetPreviousPromiseState = psRejected then
+    inherited
+  else begin
+    InternalExecute(function: TDisposableValue<IPromiseAccess>
+      begin
+        //In the .Execute of TPromiseInPromise<T> we compare the "extracted"
+        //promise value (result of FFunc(...) which returns a Promise) with
+        //the input value from the previous promise. To do this, we have to store
+        //its value here redundant, because .Await from the previous promise
+        //will Nil the value on Await if this is an object. This is done,
+        //because we transfer the ownership of an object on Await (by design).
+        SetInputValue(FPreviousPromise.Await);
+        Result := FFunc(GetInputValue);
+      end);
+
+    //We explicit remove the references to FFunc and FCatchFunc here to prevent reference cycles
+    //with anonymous methods and closures, see https://stackoverflow.com/questions/51213638/why-is-this-interface-not-correctly-released-when-the-method-is-exited/51221496#51221496
+    //and https://quality.embarcadero.com/browse/RSP-30430
+    FCatchFunc := nil;
+    FFunc := nil;
+  end;
+end;
+
+function TPromiseKeepInputValue<T>.GetInputValue: T;
+begin
+  System.TMonitor.Enter(Self);
+  try
+    Result := FPreviousValue;
+  finally
+    System.TMonitor.Exit(Self);
+  end;
+end;
+
+procedure TPromiseKeepInputValue<T>.SetInputValue(AValue: T);
+begin
+  System.TMonitor.Enter(Self);
+  try
+    FPreviousValue := AValue;
+  finally
+    System.TMonitor.Exit(Self);
   end;
 end;
 
