@@ -217,13 +217,21 @@ type
   private
     function Subtract(const AValue: Integer): IPromise<Integer>;
   public
-    [Test] procedure AllWithNestedPromisesDeadlocks;
+    [Test] procedure AllWithNestedPromisesShouldNotDeadlock;
   end;
 
   [TestFixture]
   TestPromiseInPromise = class(TObject)
   public
     [Test] procedure ExpectObjectNotBeDisposedWhenReturnedInAnotherPromise;
+    [Test] procedure ExpectChainedRejectedPromiseToBeRejected;
+    [Test] procedure ExpectExceptionInAnonymousToBeRejected;
+    [Test] procedure ExpectReturnRejectedPromiseInAnonymousToBeRejected;
+    [Test] procedure ExpectCatchToReturnResolvedPromise;
+    [Test] procedure ExpectMainChainedRejectedPromiseToBeRejected;
+    [Test] procedure ExpectMainExceptionInAnonymousToBeRejected;
+    [Test] procedure ExpectMainReturnRejectedPromiseInAnonymousToBeRejected;
+    [Test] procedure ExpectMainCatchToReturnResolvedPromise;
   end;
 
   TAbstractPromise<T> = class(Next.Core.Promises.TAbstractPromise<T>)
@@ -2028,7 +2036,7 @@ end;
 
 { TestPromiseAllDeadlock }
 
-procedure TestPromiseAllDeadlock.AllWithNestedPromisesDeadlocks;
+procedure TestPromiseAllDeadlock.AllWithNestedPromisesShouldNotDeadlock;
 var LPromises: TArray<IPromise<Integer>>;
 begin
   for var i := 0 to 500 do begin
@@ -2065,22 +2073,144 @@ end;
 
 { TestPromiseInPromise }
 
+procedure TestPromiseInPromise.ExpectCatchToReturnResolvedPromise;
+begin
+  var LPromise := Promise.Reject<String>(ETestException.Create('test'))
+    .Catch(function(E: Exception): IPromise<String>
+      begin
+        Result := Promise.Resolve<String>(function: String
+          begin
+            Result := 'catched';
+          end);
+      end);
+
+  Assert.ResolvesTo<String>(LPromise, 'catched') ;
+end;
+
+procedure TestPromiseInPromise.ExpectChainedRejectedPromiseToBeRejected;
+begin
+  var LPromise := Promise.Reject<String>(ETestException.Create('test'))
+    .ThenBy(function(const AIn: String): IPromise<String>
+      begin
+        Result := Promise.Resolve<String>(function: String
+          begin
+            Result := AIn;
+          end);
+      end);
+
+  Assert.RejectsWith(LPromise, ETestException);
+end;
+
+procedure TestPromiseInPromise.ExpectExceptionInAnonymousToBeRejected;
+begin
+  var LPromise := Promise.Resolve<String>(function: String
+      begin
+        Result := 'test';
+      end)
+    .ThenBy(function(const AIn: String): IPromise<String>
+      begin
+        raise ETestException.Create('test');
+
+        Result := Promise.Resolve<String>(function: String
+          begin
+            Result := 'test';
+          end);
+      end);
+
+  Assert.RejectsWith(LPromise, ETestException);
+end;
+
+procedure TestPromiseInPromise.ExpectMainCatchToReturnResolvedPromise;
+begin
+  var LPromise := Promise.Reject<String>(ETestException.Create('test'))
+    .Main.Catch(function(E: Exception): IPromise<String>
+      begin
+        Result := Promise.Resolve<String>(function: String
+          begin
+            Result := 'catched';
+          end);
+      end);
+
+  Assert.ResolvesTo<String>(LPromise, 'catched') ;
+end;
+
+procedure TestPromiseInPromise.ExpectMainChainedRejectedPromiseToBeRejected;
+begin
+  var LPromise := Promise.Reject<String>(ETestException.Create('test'))
+    .Main.ThenBy(function(const AIn: String): IPromise<String>
+      begin
+        Result := Promise.Resolve<String>(function: String
+          begin
+            Result := AIn;
+          end);
+      end);
+
+  Assert.RejectsWith(LPromise, ETestException);
+end;
+
+procedure TestPromiseInPromise.ExpectMainExceptionInAnonymousToBeRejected;
+begin
+  var LPromise := Promise.Resolve<String>(function: String
+      begin
+        Result := 'test';
+      end)
+    .Main.ThenBy(function(const AIn: String): IPromise<String>
+      begin
+        raise ETestException.Create('test');
+
+        Result := Promise.Resolve<String>(function: String
+          begin
+            Result := 'test';
+          end);
+      end);
+
+  Assert.RejectsWith(LPromise, ETestException);
+end;
+
+procedure TestPromiseInPromise.ExpectMainReturnRejectedPromiseInAnonymousToBeRejected;
+begin
+  var LPromise := Promise.Resolve<String>(function: String
+      begin
+        Result := 'test';
+      end)
+    .Main.ThenBy(function(const AIn: String): IPromise<String>
+      begin
+        Result := Promise.Reject<String>(ETestException.Create('test'));
+      end);
+
+  Assert.RejectsWith(LPromise, ETestException);
+end;
+
 procedure TestPromiseInPromise.ExpectObjectNotBeDisposedWhenReturnedInAnotherPromise;
 begin
   var LObject := TMyObject.Create('test');
   var LPromise := Promise.Resolve<TMyObject>(function: TMyObject
-    begin
-      Result := LObject;
-    end)
-  .ThenBy(function(const AIn: TMyObject): IPromise<TMyObject>
-    begin
-      Result := Promise.Resolve<TMyObject>(function: TMyObject
-        begin
-          Result := AIn;
-        end);
-    end);
+      begin
+        Result := LObject;
+      end)
+    .ThenBy(function(const AIn: TMyObject): IPromise<TMyObject>
+      begin
+        Result := Promise.Resolve<TMyObject>(function: TMyObject
+          begin
+            Result := AIn;
+          end);
+      end);
 
   Assert.ResolvesTo<TMyObject>(LPromise, LObject).Free;
+end;
+
+procedure TestPromiseInPromise.ExpectReturnRejectedPromiseInAnonymousToBeRejected;
+begin
+  var LPromise := Promise.Resolve<String>(function: String
+    begin
+      Result := 'test';
+    end)
+    .ThenBy(function(const AIn: String): IPromise<String>
+      begin
+        Result := Promise.Reject<String>(ETestException.Create('test'));
+      end);
+
+  Assert.RejectsWith(LPromise, ETestException);
 end;
 
 initialization
