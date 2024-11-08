@@ -261,7 +261,8 @@ type
     end;
   private
     FController: ITask;
-    FSignalController: TSemaphore;
+    FSignalController: TEvent;
+    FSignalControllerRevision: Int64;
     FCancel: TEvent;
 
     FSignal: TSemaphore;
@@ -269,6 +270,7 @@ type
     FIdleThreads: Integer;
 
     FExceptionLogger: IPromiseSchedulerExceptionLogger;
+    FThreadPoolIsMaxSize: Boolean;
 
     procedure AddThread;
 
@@ -277,6 +279,7 @@ type
 
     procedure SetLogger(ALogger: IPromiseSchedulerExceptionLogger);
     procedure LogFatalException(APromiseClassname: String; AException: Exception);
+    procedure SignalControllerIf;
   protected
     FPromises: TList<IPromiseAccess>;
 
@@ -292,7 +295,6 @@ type
     procedure Start;
     procedure Schedule(APromise: IPromiseAccess);
     procedure Signal;
-    function ThreadCount: Integer;
   end;
 {$ENDREGION}
 
@@ -868,12 +870,10 @@ begin
     System.TMonitor.Exit(FPromises);
   end;
   Signal();
-
-  FSignalController.Release;
+  SignalControllerIf();
 end;
 
-procedure TPromiseScheduler.SetLogger(
-  ALogger: IPromiseSchedulerExceptionLogger);
+procedure TPromiseScheduler.SetLogger(ALogger: IPromiseSchedulerExceptionLogger);
 begin
   System.TMonitor.Enter(Self);
   try
@@ -887,43 +887,42 @@ procedure TPromiseScheduler.AddThread;
 begin
   FThreads.Add(TPromiseThread.Create(Self));
   FThreads.Last.NameThreadForDebugging('Promise worker - #' + FThreads.Count.ToString(), FThreads.Last.ThreadID);
-end;
-
-function TPromiseScheduler.ThreadCount: Integer;
-begin
-  Result := FThreads.Count;
+  FThreadPoolIsMaxSize := (FThreads.Count >= MAX_POOL_SIZE);
 end;
 
 procedure TPromiseScheduler.ControlPool;
-var
-  LEvents: Array[0..1] of THandle;
-  LWaitResult: Cardinal;
-  LCancel: Boolean;
-  LThread: TPromiseThread;
-  i: Integer;
+var LEvents: Array[0..1] of THandle;
 begin
   LEvents[0] := FCancel.Handle;
   LEvents[1] := FSignalController.Handle;
-  LCancel := False;
+  var LCancel := False;
 
-  for i := 0 to MIN_POOL_SIZE - 1 do
+  for var i := 0 to MIN_POOL_SIZE - 1 do
     AddThread();
 
   while (not LCancel) do begin
-    LWaitResult := WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+    const LWaitResult = WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+    case LWaitResult of
+      WAIT_OBJECT_0: LCancel := True;
 
-    if LWaitResult = WAIT_OBJECT_0 then
-      LCancel := True;
-    if LWaitResult = (WAIT_OBJECT_0 + 1) then begin
-      if GrowPool() then begin
-        //Take is easy, only grow/shrink every 10 seconds
-        if FCancel.WaitFor(100) = wrSignaled then
-          LCancel := True;
+      WAIT_OBJECT_0 + 1: begin
+        FSignalController.ResetEvent;
+        const LRevisionBefore = TInterlocked.Read(FSignalControllerRevision);
+
+        if GrowPool() then begin
+          //Take it easy, only grow/shrink every 100ms
+          if FCancel.WaitFor(100) = wrSignaled then
+            LCancel := True;
+        end;
+
+        const LRevisionAfter = TInterlocked.Read(FSignalControllerRevision);
+        if LRevisionBefore <> LRevisionAfter then
+          SignalControllerIf();
       end;
     end;
   end;
 
-  for LThread in FThreads do begin
+  for var LThread in FThreads do begin
     LThread.Cancel;
     LThread.WaitFor;
     LThread.Free;
@@ -936,7 +935,9 @@ begin
   FThreads := TList<TPromiseThread>.Create;
 
   FSignal := TSemaphore.Create(nil, 0, 9999, '');
-  FSignalController := TSemaphore.Create(nil, 0, 9999, '');
+
+  FSignalController := TEvent.Create;
+  FSignalControllerRevision := 0;
 
   FCancel := TEvent.Create();
   FIdleThreads := 0;
@@ -1004,11 +1005,12 @@ begin
   if (LPromiseCount > FIdleThreads) then begin
     if (FThreads.Count < MAX_POOL_SIZE) then begin
       AddThread();
+
+      //could be that GrowPool was triggered by multiple promises, so we might need to grow more
+      SignalControllerIf();
       Result := True;
-    end else begin
-      //Reclaim to try again later
-      FSignalController.Release;
-    end;
+    end
+    //else: nothing to do, pool is already at max size, and shrinking the pool isn't supported yet
   end;
 end;
 
@@ -1032,6 +1034,14 @@ end;
 procedure TPromiseScheduler.Signal;
 begin
   FSignal.Release;
+end;
+
+procedure TPromiseScheduler.SignalControllerIf;
+begin
+  if not FThreadPoolIsMaxSize then begin
+    TInterlocked.Increment(FSignalControllerRevision); //will rollover to MinInt when the max is reached
+    FSignalController.SetEvent;
+  end;
 end;
 
 function TPromiseScheduler.SignalToken: TSemaphore;
