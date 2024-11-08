@@ -513,8 +513,9 @@ begin
   //Signal Await that we are done
   FSignal.SetEvent;
 
-  //Signal scheduler that we are done
-  _Scheduler.Signal;
+  //Signal scheduler that we are done, but only if the scheduler is not being destroyed
+  if Assigned(_Scheduler) then
+    _Scheduler.Signal;
 end;
 
 procedure TAbstractPromise<T>.Resolve(AValue: TDisposableValue<T>);
@@ -530,8 +531,9 @@ begin
   //Signal Await that we are done
   FSignal.SetEvent;
 
-  //Signal scheduler that we are done
-  _Scheduler.Signal;
+  //Signal scheduler that we are done, but only if the scheduler is not being destroyed
+  if Assigned(_Scheduler) then
+    _Scheduler.Signal;
 end;
 
 procedure TAbstractPromise<T>.SetFailure(AFailure: IFailureReason);
