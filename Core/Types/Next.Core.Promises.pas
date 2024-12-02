@@ -299,7 +299,11 @@ type
 {$ENDREGION}
 
   Promise = class
+  private
+    class function Rejector<T>(APromise: IPromise<T>): TProc<Exception>;
+    class function Resolver<T>(APromise: IPromise<T>): TProc<T>; static;
   public
+    class function New<T>(AProc: TProc<TProc<T>, TProc<Exception>>): IPromise<T>;
     class function All(const AArray: TArray<IPromiseAccess>): IPromise<TArray<TValue>>; overload;
     class function All<T>(const AArray: TArray<IPromise<T>>): IPromise<TArray<T>>; overload;
     class function Resolve<T>(AFunc: TFunc<T>): IPromise<T>; overload;
@@ -691,6 +695,42 @@ begin
         for i := Low(AArray) to High(AArray) do
           Result[i] := AArray[i].AsType<T>;
       end, dvKeep);
+end;
+
+class function Promise.Resolver<T>(APromise: IPromise<T>): TProc<T>;
+begin
+  Result := procedure(AValue: T)
+    begin
+      TFirstPromise<T>(APromise).Resolve(AValue);
+    end;
+end;
+
+class function Promise.Rejector<T>(APromise: IPromise<T>): TProc<Exception>;
+begin
+  Result := procedure(E: Exception)
+    begin
+      TFirstPromise<T>(APromise).Reject(TFailureReason.Create(E));
+    end;
+end;
+
+class function Promise.New<T>(
+  AProc: TProc<TProc<T>, TProc<Exception>>): IPromise<T>;
+begin
+  Result := TFirstPromise<T>.Create(function: T begin
+    Result := Default(T);
+  end);
+
+  //We use seperate methods to create the resolver and rejector to trick the
+  //compiler in increasing the reference count of our resulting promise. Only
+  //when all references to all anonymous methods (so, including the references
+  //to these resolve and reject methods) are gone, then the reference count of
+  //the promise will be decreased again.
+  //
+  //This way we make sure that we can safely call the resolve or reject methods,
+  //even if the original result (promise) gets out-of-scope in the caller of this
+  //method.
+
+  AProc(Resolver<T>(Result), Rejector<T>(Result));
 end;
 
 class function Promise.Reject<T>(E: Exception): IPromise<T>;
