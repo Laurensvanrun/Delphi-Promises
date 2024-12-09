@@ -280,6 +280,8 @@ type
     procedure SetLogger(ALogger: IPromiseSchedulerExceptionLogger);
     procedure LogFatalException(APromiseClassname: String; AException: Exception);
     procedure SignalControllerIf;
+
+    function WaitForMultipleEvents(AEvents: array of THandleObject): Integer;
   protected
     FPromises: TList<IPromiseAccess>;
 
@@ -314,7 +316,7 @@ var
 implementation
 
 uses
-  Winapi.Windows, System.TypInfo;
+  System.TypInfo;
 
 { TPromise<T> }
 
@@ -893,17 +895,18 @@ begin
 end;
 
 procedure TPromiseScheduler.ControlPool;
-var LEvents: Array[0..1] of THandle;
+const WAIT_OBJECT_0 = 0;
+var LEvents: Array[0..1] of THandleObject;
 begin
-  LEvents[0] := FCancel.Handle;
-  LEvents[1] := FSignalController.Handle;
+  LEvents[0] := FCancel;
+  LEvents[1] := FSignalController;
   var LCancel := False;
 
   for var i := 0 to MIN_POOL_SIZE - 1 do
     AddThread();
 
   while (not LCancel) do begin
-    const LWaitResult = WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+    const LWaitResult = WaitForMultipleEvents(LEvents);
     case LWaitResult of
       WAIT_OBJECT_0: LCancel := True;
 
@@ -1054,6 +1057,37 @@ end;
 procedure TPromiseScheduler.Start;
 begin
   FController.Start;
+end;
+
+function TPromiseScheduler.WaitForMultipleEvents(AEvents: array of THandleObject): Integer;
+var
+  LEventIndex: Integer;
+  LWaitResult: TWaitResult;
+  LTimeout: Cardinal;
+  LSignaledEventIndex: Integer;
+begin
+  LTimeout := 100;
+  LSignaledEventIndex := -1;
+
+  repeat
+    for LEventIndex := Low(AEvents) to High(AEvents) do
+    begin
+      LWaitResult := AEvents[LEventIndex].WaitFor(LTimeout);
+
+      if LWaitResult = wrSignaled then
+      begin
+        LSignaledEventIndex := LEventIndex;
+        Break;
+      end;
+    end;
+
+    if LSignaledEventIndex <> -1 then
+      Break;
+
+    Sleep(10);
+  until False;
+
+  Result := LSignaledEventIndex;
 end;
 
 { TPromiseMain<T> }
@@ -1276,7 +1310,7 @@ end;
 
 procedure TPromiseScheduler.TPromiseThread.Execute;
 var
-  LEvents: Array[0..1] of THandle;
+  LEvents: Array[0..1] of THandleObject;
   LWaitResult: Cardinal;
   LCancel: Boolean;
   LPromise: IPromiseAccess;
@@ -1284,15 +1318,15 @@ var
 begin
   inherited;
 
-  LEvents[0] := FCancel.Handle;
-  LEvents[1] := FScheduler.SignalToken.Handle;
+  LEvents[0] := FCancel;
+  LEvents[1] := FScheduler.SignalToken;
   LCancel := False;
 
   while (not LCancel) do begin
     try
       FScheduler.IncreaseIdleThread;
       try
-        LWaitResult := WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+        LWaitResult := WaitForMultipleEvents(LEvents);
       finally
         FScheduler.DecreaseIdleThread;
       end;
