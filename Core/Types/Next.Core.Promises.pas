@@ -280,8 +280,6 @@ type
     procedure SetLogger(ALogger: IPromiseSchedulerExceptionLogger);
     procedure LogFatalException(APromiseClassname: String; AException: Exception);
     procedure SignalControllerIf;
-
-    function WaitForMultipleEvents(AEvents: array of THandleObject): Integer;
   protected
     FPromises: TList<IPromiseAccess>;
 
@@ -317,6 +315,37 @@ implementation
 
 uses
   System.TypInfo;
+
+function WaitForMultipleEvents(AEvents: array of THandleObject): Integer;
+var
+  LEventIndex: Integer;
+  LWaitResult: TWaitResult;
+  LTimeout: Cardinal;
+  LSignaledEventIndex: Integer;
+begin
+  LTimeout := 100;
+  LSignaledEventIndex := -1;
+
+  repeat
+    for LEventIndex := Low(AEvents) to High(AEvents) do
+    begin
+      LWaitResult := AEvents[LEventIndex].WaitFor(LTimeout);
+
+      if LWaitResult = wrSignaled then
+      begin
+        LSignaledEventIndex := LEventIndex;
+        Break;
+      end;
+    end;
+
+    if LSignaledEventIndex <> -1 then
+      Break;
+
+    Sleep(10);
+  until False;
+
+  Result := LSignaledEventIndex;
+end;
 
 { TPromise<T> }
 
@@ -1057,37 +1086,6 @@ end;
 procedure TPromiseScheduler.Start;
 begin
   FController.Start;
-end;
-
-function TPromiseScheduler.WaitForMultipleEvents(AEvents: array of THandleObject): Integer;
-var
-  LEventIndex: Integer;
-  LWaitResult: TWaitResult;
-  LTimeout: Cardinal;
-  LSignaledEventIndex: Integer;
-begin
-  LTimeout := 100;
-  LSignaledEventIndex := -1;
-
-  repeat
-    for LEventIndex := Low(AEvents) to High(AEvents) do
-    begin
-      LWaitResult := AEvents[LEventIndex].WaitFor(LTimeout);
-
-      if LWaitResult = wrSignaled then
-      begin
-        LSignaledEventIndex := LEventIndex;
-        Break;
-      end;
-    end;
-
-    if LSignaledEventIndex <> -1 then
-      Break;
-
-    Sleep(10);
-  until False;
-
-  Result := LSignaledEventIndex;
 end;
 
 { TPromiseMain<T> }
