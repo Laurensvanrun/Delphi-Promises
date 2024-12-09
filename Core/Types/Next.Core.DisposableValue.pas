@@ -35,7 +35,7 @@ procedure SetFlagInterface(var Intf: IInterface);
 implementation
 
 uses
-  System.Rtti, Winapi.Windows, Spring.Reflection;
+  System.Rtti;
 
 function NopAddref(inst: Pointer): Integer; stdcall;
 begin
@@ -70,9 +70,20 @@ end;
 { TDisposableValue<T> }
 
 class operator TDisposableValue<T>.Implicit(const dv: TDisposableValue<T>): T;
+var
+  LCtx: TRttiContext;
+  LName: string;
 begin
   if not dv.HasValue() then
-    raise EDisposableValueException.Create('DisposableValue<' + TType.GetType(System.TypeInfo(T)).Name + '> has no value set');
+  begin
+    LCtx := TRttiContext.Create;
+    try
+      LName := LCtx.GetType(System.TypeInfo(T)).Name;
+    finally
+      LCtx.Free;
+    end;
+    raise EDisposableValueException.Create('DisposableValue<' + LName + '> has no value set');
+  end;
 
   Result := dv.FValue;
 end;
