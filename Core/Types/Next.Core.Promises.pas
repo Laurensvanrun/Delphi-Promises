@@ -314,7 +314,43 @@ var
 implementation
 
 uses
-  Winapi.Windows, System.TypInfo;
+{$IFDEF MSWINDOWS}
+  Winapi.Windows,
+{$ENDIF} 
+  System.TypInfo;
+
+{$IFNDEF MSWINDOWS}
+function WaitForMultipleEvents(AEvents: array of THandleObject): Integer;
+var
+  LEventIndex: Integer;
+  LWaitResult: TWaitResult;
+  LTimeout: Cardinal;
+  LSignaledEventIndex: Integer;
+begin
+  LTimeout := 100;
+  LSignaledEventIndex := -1;
+
+  repeat
+    for LEventIndex := Low(AEvents) to High(AEvents) do
+    begin
+      LWaitResult := AEvents[LEventIndex].WaitFor(LTimeout);
+
+      if LWaitResult = wrSignaled then
+      begin
+        LSignaledEventIndex := LEventIndex;
+        Break;
+      end;
+    end;
+
+    if LSignaledEventIndex <> -1 then
+      Break;
+
+    Sleep(10);
+  until False;
+
+  Result := LSignaledEventIndex;
+end;
+{$ENDIF}
 
 { TPromise<T> }
 
@@ -893,17 +929,36 @@ begin
 end;
 
 procedure TPromiseScheduler.ControlPool;
-var LEvents: Array[0..1] of THandle;
+var 
+{$IFDEF MSWINDOWS}
+  LEvents: Array[0..1] of THandle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+  LEvents: Array[0..1] of THandleObject;
+const
+  WAIT_OBJECT_0 = 0;
+{$ENDIF}
 begin
+{$IFDEF MSWINDOWS}
   LEvents[0] := FCancel.Handle;
   LEvents[1] := FSignalController.Handle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+  LEvents[0] := FCancel;
+  LEvents[1] := FSignalController;
+{$ENDIF}
   var LCancel := False;
 
   for var i := 0 to MIN_POOL_SIZE - 1 do
     AddThread();
 
   while (not LCancel) do begin
+{$IFDEF MSWINDOWS}
     const LWaitResult = WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+    const LWaitResult = WaitForMultipleEvents(LEvents);
+{$ENDIF}
     case LWaitResult of
       WAIT_OBJECT_0: LCancel := True;
 
@@ -1276,23 +1331,42 @@ end;
 
 procedure TPromiseScheduler.TPromiseThread.Execute;
 var
+{$IFDEF MSWINDOWS}
   LEvents: Array[0..1] of THandle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+  LEvents: Array[0..1] of THandleObject;
+{$ENDIF}
   LWaitResult: Cardinal;
   LCancel: Boolean;
   LPromise: IPromiseAccess;
   LPromiseClassname: String;
+{$IFNDEF MSWINDOWS}
+const
+  WAIT_OBJECT_0 = 0;
+{$ENDIF}
 begin
   inherited;
-
+{$IFDEF MSWINDOWS}
   LEvents[0] := FCancel.Handle;
   LEvents[1] := FScheduler.SignalToken.Handle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+  LEvents[0] := FCancel;
+  LEvents[1] := FScheduler.SignalToken;
+{$ENDIF}
   LCancel := False;
 
   while (not LCancel) do begin
     try
       FScheduler.IncreaseIdleThread;
       try
+{$IFDEF MSWINDOWS}
         LWaitResult := WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+        LWaitResult := WaitForMultipleEvents(LEvents);
+{$ENDIF}
       finally
         FScheduler.DecreaseIdleThread;
       end;
