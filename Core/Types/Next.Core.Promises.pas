@@ -944,7 +944,7 @@ begin
   LEvents[1] := FSignalController.Handle;
 {$ENDIF}
 {$IFNDEF MSWINDOWS}
-  LEvents[0] := FCancel.Handle;
+  LEvents[0] := FCancel;
   LEvents[1] := FSignalController;
 {$ENDIF}
   var LCancel := False;
