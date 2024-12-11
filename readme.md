@@ -1,5 +1,13 @@
 # Promise Implementation in Delphi
 
+## Table of Contents
+
+ 1. [Getting started](#getting-started)
+ 2. [Exception handling](#exception-handling)
+ 3. [UI interaction](#ui-interaction)
+ 4. [Memory Management](#memory-management)
+ 5. [Extended example: using Promises in Asynchronous Methods](#extended-example-using-promises-in-asynchronous-methods)
+
 ## Overview
 
 This Delphi library implements promises, enabling asynchronous programming by facilitating the handling of operations that may require time to complete. A promise represents a guarantee for an eventual result, streamlining the way asynchronous operations are managed in your applications. Additionally, this implementation embraces monadic principles, offering a structured approach to chaining computations and handling their outcomes.
@@ -16,7 +24,233 @@ This Delphi library implements promises, enabling asynchronous programming by fa
 
 To integrate this promise library into your Delphi projects, include the necessary unit in your project source and follow the examples provided below.
 
-Here is a simple example to see how you could perform a background operation and wait (blocking) for it to complete.
+### Create a new promise with an executor function
+`Promise.New<T>` is a class method that creates a new promise of type `T`. It accepts an **executor function** as its parameter, which defines the logic for resolving or rejecting the promise.
+
+The executor function has the following signature and is executed **synchronous** in the same thread context.
+
+```delphi
+TProc<TProc<T>, TProc<Exception>>
+```
+
+- The first parameter (`TProc<T>`) is a **resolve callback**: it is used to fulfill the promise with a value of type `T`.
+- The second parameter (`TProc<Exception>`) is a **reject callback**: it is used to reject the promise with an exception.
+
+The method returns an interface `IPromise<T>` that represents the created promise. This is conceptually similar to JavaScript promises, allowing for chaining, error handling, and managing asynchronous workflows.
+
+---
+
+#### Relation to JavaScript's Promise
+
+`Promise.New<T>` is modeled after JavaScript's `new Promise` constructor. Here's how they align:
+
+| Delphi (`Promise.New<T>`)               | JavaScript (`new Promise`)                              |
+|-----------------------------------------|--------------------------------------------------------|
+| `Promise.New<T>(AProc)`                 | `new Promise((resolve, reject) => { ... })`            |
+| Accepts a function with `resolve` and `reject` callbacks | Accepts a function with `resolve` and `reject` callbacks |
+| Returns an `IPromise<T>`                | Returns a `Promise` object                             |
+| Used for custom asynchronous logic      | Used for custom asynchronous logic                     |
+
+**Example in JavaScript:**
+```javascript
+const myPromise = new Promise((resolve, reject) => {
+  setTimeout(() => {
+    resolve("Success!");
+  }, 1000);
+});
+```
+
+**Equivalent in Delphi:**
+```delphi
+var
+  MyPromise: IPromise<string>;
+begin
+  MyPromise := Promise.New<string>(
+    procedure(Resolve: TProc<string>; Reject: TProc<Exception>)
+    begin
+      TThread.CreateAnonymousThread(
+        procedure
+        begin
+          Sleep(1000);
+          Resolve('Success!');
+        end);
+    end
+  );
+end;
+```
+
+---
+
+#### When to Use `Promise.New<T>`
+
+`Promise.New<T>` should be used when you need to define custom asynchronous operations that don't already return a promise or similar construct. It allows fine-grained control over when and how a promise is resolved or rejected.
+
+##### Use Cases
+1. **Custom Asynchronous Operations:**  
+   When working with asynchronous operations that are not inherently promise-based, such as raw thread management or callback-based APIs.
+
+   ```delphi
+   var
+     MyPromise: IPromise<Integer>;
+   begin
+     MyPromise := Promise.New<Integer>(
+       procedure(Resolve: TProc<Integer>; Reject: TProc<Exception>)
+       begin
+         TThread.CreateAnonymousThread(
+           procedure
+           begin
+             try
+               Sleep(1000);
+               Resolve(42); // Fulfill with a value
+             except
+               on E: Exception do
+                 Reject(E); // Reject with an error
+             end;
+           end);
+       end
+     );
+   end;
+   ```
+
+2. **Bridge Non-Promise APIs:**  
+   Wrap existing callback-based APIs in a promise interface to make them easier to work with.
+
+   ```delphi
+   function ReadFileAsync(const FileName: string): IPromise<string>;
+   begin
+     Result := Promise.New<string>(
+       procedure(Resolve: TProc<string>; Reject: TProc<Exception>)
+       begin
+         TThread.CreateAnonymousThread(
+           procedure
+           begin
+             try
+               var Content := TFile.ReadAllText(FileName);
+               Resolve(Content);
+             except
+               on E: Exception do
+                 Reject(E);
+             end;
+           end);
+       end
+     );
+   end;
+   ```
+
+3. **Chaining and Composition:**  
+   Combine multiple asynchronous operations into a sequential flow using `.ThenBy` or `.Catch`.
+
+---
+
+#### Caution
+- Always ensure `Resolve` or `Reject` is called exactly once to avoid unexpected behavior.
+- Be careful with exceptions: make sure any error is properly caught and passed to the `Reject` callback.
+
+---
+
+#### Benefits of `Promise.New<T>`
+1. **Flexibility:** Allows you to adapt any asynchronous workflow to a promise-based approach.
+2. **Consistency:** Aligns with the standard promise pattern found in JavaScript, making it familiar for developers with cross-platform experience.
+3. **Chaining Support:** Enables sequential and conditional execution of asynchronous tasks through promise chaining.
+
+By leveraging `Promise.New<T>`, developers can unify asynchronous code, making it cleaner, more readable, and easier to maintain.
+
+### Create a promise with an async method without executor methods
+`Promise.Resolve<T>` is a class method that creates and immediately resolves a promise of type `T`. It accepts a **function** (`TFunc<T>`) that returns the value to resolve the promise with. This function is executed **asynchronous**.
+
+The method returns an interface `IPromise<T>` that represents the resolved promise. This is conceptually equivalent to the `Promise.resolve` method in JavaScript.
+
+---
+
+#### Relation to JavaScript's `Promise.resolve`
+
+`Promise.Resolve<T>` is modeled after JavaScript's `Promise.resolve` method. Here's how they align:
+
+| Delphi (`Promise.Resolve<T>`)            | JavaScript (`Promise.resolve`)                  |
+|------------------------------------------|-----------------------------------------------|
+| `Promise.Resolve<T>(AFunc)`              | `Promise.resolve(() => { return value; })`    |
+| Accepts a function returning a value     | Accepts a value or a function returning a value |
+| Returns an `IPromise<T>`                 | Returns a `Promise` object                    |
+| Used to wrap a value or computation in a promise | Used to wrap a value or computation in a promise  |
+
+**Example in JavaScript:**
+```javascript
+const resolvedPromise = Promise.resolve(() => "Hello, World!");
+```
+
+**Equivalent in Delphi:**
+```delphi
+var
+  ResolvedPromise: IPromise<string>;
+begin
+  ResolvedPromise := Promise.Resolve<string>(
+    function: string
+    begin
+      Result := 'Hello, World!';
+    end
+  );
+end;
+```
+
+---
+
+#### When to Use `Promise.Resolve<T>`
+
+`Promise.Resolve<T>` should be used when you already have a value or computation and want to return it as a promise, so that the computation is done in the background (asynchronous). It is useful for maintaining consistency when working with promise-based workflows.
+
+##### Use Cases
+1. **Execute heavy operations asynchronous:**  
+   Use `Promise.Resolve<T>` to perform some heavy operations asynchronous, continue the flow and retrieve the result later (using `Await` or chaining).
+
+   ```delphi
+   function GetValueAsync: IPromise<string>;
+   begin
+     Result := Promise.Resolve<string>(
+       function: string
+       begin
+         Result := 'Do some time consuming operation here';
+         sleep(10000);
+       end
+     );
+   end;
+   ```
+
+2. **Wrapping Immediate Values in a Promise:**  
+   Use `Promise.Resolve<T>` to create a resolved promise from an already available value or computation.
+   
+   ```delphi
+   var
+     ResolvedPromise: IPromise<Integer>;
+   begin
+     ResolvedPromise := Promise.Resolve<Integer>(
+       function: Integer
+       begin
+         Result := 42; // Return an immediate value
+       end
+     );
+   end;
+   ```
+
+3. **Normalizing Return Values:**  
+   When a function might return either a value or a promise, `Promise.Resolve<T>` ensures that the result is always a promise.
+   
+   ```delphi
+   function GetValueAsync: IPromise<string>;
+   begin
+     Result := Promise.Resolve<string>(
+       function: string
+       begin
+         Result := 'Synchronous Value';
+       end
+     );
+   end;
+   ```
+
+---
+
+#### Example with Await
+
+Here is a simple example to see how you could perform an **async** (background) operation and wait (blocking) for it to complete.
 
 ```delphi
 uses Next.Core.Promises;
@@ -49,7 +283,7 @@ begin
     begin
       Result := 10;
     end)
-  .ThenBy<Integer>(function(const value: Integer): Integer
+  .ThenBy(function(const value: Integer): Integer
     begin
       Result := value * 2; // Process in background thread
     end)
@@ -87,6 +321,14 @@ begin
   WriteLn(promise.Await); // Outputs: Transformed Value: 10
 end;
 ```
+
+### Using Await
+
+The `.Await` operator is used to retrieve the value from a resolved promise. The behavior is that the calling thread is blocked from there until the promise is fulfilled (resolved or rejected). If the promise is resolved, it will return the resolved value. If the promise is rejected, it will raise the caught exception.
+
+#### Using in main thread
+
+Due to the blocking nature of `.Await`, it is advised to use it in the main thread context as little as possible. If you use it in the main thread context, a `CheckSynchronize` method is repeatedly executed until the promise is fulfilled. This makes sure that UI interaction, such as repaints, will continue while your code flow is interrupted. The better way is to use messages to notify the UI of changes, see the examples below.
 
 ## Exception handling
 

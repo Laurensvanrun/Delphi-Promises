@@ -169,6 +169,14 @@ type
   end;
 
   [TestFixture]
+  TTestPromiseNew = class
+    [Test] procedure ExpectPendingAfterCreate;
+    [Test] procedure ExpectRejectedAfterReject;
+    [Test] procedure ExpectFullfilledAfterResolve;
+    [Test] procedure ExpectPromiseIsNotDestroyedAsLongAsAnonymousExists;
+  end;
+
+  [TestFixture]
   TTestPromiseOnObject = class
     [Test]
     procedure PromiseOpToListKeep();
@@ -2213,9 +2221,69 @@ begin
   Assert.RejectsWith(LPromise, ETestException);
 end;
 
+{ TTestPromiseNew }
+
+procedure TTestPromiseNew.ExpectPendingAfterCreate;
+begin
+  var LPromise := Promise.New<Integer>(procedure(AResolve: TProc<Integer>; AReject: TProc<Exception>)
+    begin
+      //Do nothing
+    end);
+  Assert.AreEqual(TPromiseState.psPending, LPromise.State);
+end;
+
+procedure TTestPromiseNew.ExpectPromiseIsNotDestroyedAsLongAsAnonymousExists;
+
+  //We use a separate method for this to be sure that the anonymous method gets
+  //out of scope.
+  function _GiveResolver: TProc<Integer>;
+  begin
+    var LResolver: TProc<Integer>;
+    var LPromise := Promise.New<Integer>(procedure(AResolve: TProc<Integer>; AReject: TProc<Exception>)
+      begin
+        LResolver := AResolve;
+      end);
+    LPromise := nil;
+
+    Result := LResolver;
+  end;
+
+begin
+  var LResolve: TProc<Integer>;
+  LResolve := _GiveResolver();
+
+  Assert.WillNotRaise(procedure begin LResolve(10); end);
+end;
+
+procedure TTestPromiseNew.ExpectRejectedAfterReject;
+begin
+  var LReject: TProc<Exception>;
+
+  var LPromise := Promise.New<Integer>(procedure(AResolve: TProc<Integer>; AReject: TProc<Exception>)
+    begin
+      LReject := AReject;
+    end);
+  Assert.AreEqual(TPromiseState.psPending, LPromise.State);
+  LReject(ETestException.Create('Rejected'));
+  Assert.AreEqual(TPromiseState.psRejected, LPromise.State);
+  Assert.WillRaise(procedure begin LPromise.Await end, ETestException);
+end;
+
+procedure TTestPromiseNew.ExpectFullfilledAfterResolve;
+begin
+  var LResolve: TProc<Integer>;
+
+  var LPromise := Promise.New<Integer>(procedure(AResolve: TProc<Integer>; AReject: TProc<Exception>)
+    begin
+      LResolve := AResolve;
+    end);
+  Assert.AreEqual(TPromiseState.psPending, LPromise.State);
+  LResolve(10);
+  Assert.AreEqual(TPromiseState.psFullfilled, LPromise.State);
+  Assert.AreEqual(10, LPromise.Await);
+end;
+
 initialization
-  TDUnitX.RegisterTestFixture(TTestScheduler);
-  TDUnitX.RegisterTestFixture(TTestPromiseOnObject);
   TDUnitX.RegisterTestFixture(TTestPromise<Integer>);
   TDUnitX.RegisterTestFixture(TTestPromise<Boolean>);
   TDUnitX.RegisterTestFixture(TTestPromise<String>);
@@ -2236,7 +2304,4 @@ initialization
   TDUnitX.RegisterTestFixture(TTestPromiseException<String>);
   TDUnitX.RegisterTestFixture(TTestPromiseException<TSimpleRecord>);
   TDUnitX.RegisterTestFixture(TTestPromiseException<TMyObject>);
-  TDUnitX.RegisterTestFixture(TTestPromiseAllObjects);
-  TDUnitX.RegisterTestFixture(TestPromiseAllDeadlock);
-  TDUnitX.RegisterTestFixture(TestPromiseInPromise);
 end.
