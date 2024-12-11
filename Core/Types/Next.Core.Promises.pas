@@ -953,12 +953,12 @@ begin
     AddThread();
 
   while (not LCancel) do begin
-    {$IFDEF MSWINDOWS}
+{$IFDEF MSWINDOWS}
     const LWaitResult = WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
-    {$ENDIF}
-    {$IFNDEF MSWINDOWS}
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
     const LWaitResult = WaitForMultipleEvents(LEvents);
-    {$ENDIF}
+{$ENDIF}
     case LWaitResult of
       WAIT_OBJECT_0: LCancel := True;
 
@@ -1347,7 +1347,7 @@ const
 {$ENDIF}
 begin
   inherited;
-{$IFNDEF MSWINDOWS}
+{$IFDEF MSWINDOWS}
   LEvents[0] := FCancel.Handle;
   LEvents[1] := FScheduler.SignalToken.Handle;
 {$ENDIF}
