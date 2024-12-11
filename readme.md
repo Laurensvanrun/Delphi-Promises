@@ -1,5 +1,13 @@
 # Promise Implementation in Delphi
 
+## Table of Contents
+
+ 1. [Getting started](#getting-started)
+ 2. [Exception handling](#exception-handling)
+ 3. [UI interaction](#ui-interaction)
+ 4. [Memory Management](#memory-management)
+ 5. [Extended example: using Promises in Asynchronous Methods](#extended-example-using-promises-in-asynchronous-methods)
+
 ## Overview
 
 This Delphi library implements promises, enabling asynchronous programming by facilitating the handling of operations that may require time to complete. A promise represents a guarantee for an eventual result, streamlining the way asynchronous operations are managed in your applications. Additionally, this implementation embraces monadic principles, offering a structured approach to chaining computations and handling their outcomes.
@@ -130,7 +138,7 @@ end;
    ```
 
 3. **Chaining and Composition:**  
-   Combine multiple asynchronous operations into a sequential flow using `.Then` or `.Catch`.
+   Combine multiple asynchronous operations into a sequential flow using `.ThenBy` or `.Catch`.
 
 ---
 
@@ -275,7 +283,7 @@ begin
     begin
       Result := 10;
     end)
-  .ThenBy<Integer>(function(const value: Integer): Integer
+  .ThenBy(function(const value: Integer): Integer
     begin
       Result := value * 2; // Process in background thread
     end)
@@ -313,6 +321,14 @@ begin
   WriteLn(promise.Await); // Outputs: Transformed Value: 10
 end;
 ```
+
+### Using Await
+
+The `.Await` operator is used to retrieve the value from a resolved promise. The behavior is that the calling thread is blocked from there until the promise is fulfilled (resolved or rejected). If the promise is resolved, it will return the resolved value. If the promise is rejected, it will raise the caught exception.
+
+#### Using in main thread
+
+Due to the blocking nature of `.Await`, it is advised to use it in the main thread context as little as possible. If you use it in the main thread context, a `CheckSynchronize` method is repeatedly executed until the promise is fulfilled. This makes sure that UI interaction, such as repaints, will continue while your code flow is interrupted. The better way is to use messages to notify the UI of changes, see the examples below.
 
 ## Exception handling
 
