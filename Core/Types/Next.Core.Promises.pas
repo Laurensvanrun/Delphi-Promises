@@ -314,8 +314,12 @@ var
 implementation
 
 uses
+{$IFDEF MSWINDOWS}
+  Winapi.Windows,
+{$ENDIF} 
   System.TypInfo;
 
+{$IFNDEF MSWINDOWS}
 function WaitForMultipleEvents(AEvents: array of THandleObject): Integer;
 var
   LEventIndex: Integer;
@@ -346,6 +350,7 @@ begin
 
   Result := LSignaledEventIndex;
 end;
+{$ENDIF}
 
 { TPromise<T> }
 
@@ -924,18 +929,36 @@ begin
 end;
 
 procedure TPromiseScheduler.ControlPool;
-const WAIT_OBJECT_0 = 0;
-var LEvents: Array[0..1] of THandleObject;
+var 
+{$IFDEF MSWINDOWS}
+  LEvents: Array[0..1] of THandle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+  LEvents: Array[0..1] of THandleObject;
+const
+  WAIT_OBJECT_0 = 0;
+{$ENDIF}
 begin
-  LEvents[0] := FCancel;
+{$IFDEF MSWINDOWS}
+  LEvents[0] := FCancel.Handle;
+  LEvents[1] := FSignalController.Handle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
+  LEvents[0] := FCancel.Handle;
   LEvents[1] := FSignalController;
+{$ENDIF}
   var LCancel := False;
 
   for var i := 0 to MIN_POOL_SIZE - 1 do
     AddThread();
 
   while (not LCancel) do begin
+    {$IFDEF MSWINDOWS}
+    const LWaitResult = WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+    {$ENDIF}
+    {$IFNDEF MSWINDOWS}
     const LWaitResult = WaitForMultipleEvents(LEvents);
+    {$ENDIF}
     case LWaitResult of
       WAIT_OBJECT_0: LCancel := True;
 
@@ -1308,23 +1331,42 @@ end;
 
 procedure TPromiseScheduler.TPromiseThread.Execute;
 var
+{$IFDEF MSWINDOWS}
+  LEvents: Array[0..1] of THandle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
   LEvents: Array[0..1] of THandleObject;
+{$ENDIF}
   LWaitResult: Cardinal;
   LCancel: Boolean;
   LPromise: IPromiseAccess;
   LPromiseClassname: String;
+{$IFNDEF MSWINDOWS}
+const
+  WAIT_OBJECT_0 = 0;
+{$ENDIF}
 begin
   inherited;
-
+{$IFNDEF MSWINDOWS}
+  LEvents[0] := FCancel.Handle;
+  LEvents[1] := FScheduler.SignalToken.Handle;
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
   LEvents[0] := FCancel;
   LEvents[1] := FScheduler.SignalToken;
+{$ENDIF}
   LCancel := False;
 
   while (not LCancel) do begin
     try
       FScheduler.IncreaseIdleThread;
       try
+{$IFDEF MSWINDOWS}
+        LWaitResult := WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+{$ENDIF}
+{$IFNDEF MSWINDOWS}
         LWaitResult := WaitForMultipleEvents(LEvents);
+{$ENDIF}
       finally
         FScheduler.DecreaseIdleThread;
       end;
