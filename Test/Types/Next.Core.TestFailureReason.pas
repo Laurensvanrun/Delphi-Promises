@@ -15,6 +15,8 @@ type
     procedure NoValidException;
     [Test]
     procedure DetachException;
+    [Test]
+    procedure ExpectSuccessiveDetachExceptionToGiveClonedException;
   end;
 
 implementation
@@ -41,6 +43,26 @@ begin
   end;
 
   Assert.IsNull(LReason.Reason);
+end;
+
+procedure TTestFailureReason.ExpectSuccessiveDetachExceptionToGiveClonedException;
+var
+  LReason: IFailureReason;
+  LException: Exception;
+begin
+  LReason := TFailureReason.Create(ETestException.Create('My Exception'));
+
+  //First detach is the original exception
+  LException := LReason.DetachExceptionObject;
+  Assert.InheritsFrom(LException.ClassType, ETestException);
+  Assert.AreEqual('My Exception', LException.Message);
+
+  //Successive detaches are clones of the original exception
+  for var i := 0 to 10 do begin
+    LException := LReason.DetachExceptionObject;
+    Assert.InheritsFrom(LException.ClassType, ETestException);
+    Assert.AreEqual('My Exception', LException.Message);
+  end;
 end;
 
 procedure TTestFailureReason.FailureReason;

@@ -9,7 +9,12 @@ type
   { We have to make our Exception-object reference counted (through IFailureReason)
     because we can have multiple promises refering the same exception object.
     The best solution should be to clone the Exception object, but this is not
-    possible (it can be a custom descendant with all kind of fields).
+    possible (it can be a custom descendant with all kind of fields). However,
+    we do clone the same exception object for the rare cases where the user
+    calls Await multiple times on the same promise. Although this is an indication
+    of an error in the code flow, it can happen and we want our promise to be
+    as immutable as it can be and copy the same JavaScript/TypeScript behavior
+    as good as possible.
 
     Using this solution we can make the following situation work:
 
@@ -32,11 +37,15 @@ type
     function DetachExceptionObject: Exception;
   end;
 
+  EFailureReasonAlreadyRaised = class(Exception);
+
   TFailureReason = class(TInterfacedObject, IFailureReason)
   private
+    FReasonClone: Exception;
     FReason: Exception;
 
     function DetachExceptionObject: Exception;
+    function Clone(E: Exception): Exception;
   protected
     function GetReason: Exception;
   public
@@ -48,12 +57,24 @@ implementation
 
 { TFailureReason }
 
-{ TFailureReason }
-
 function TFailureReason.DetachExceptionObject: Exception;
 begin
-  Result := FReason;
-  FReason := nil;
+  //First time detach the original exception and clone the exception
+  //for the case that somebody calls Await multiple times on a rejected
+  //promise.
+  if Assigned(FReason) then begin
+    FReasonClone := Clone(FReason);
+    Result := FReason;
+    FReason := nil;
+  end else
+    Result := Clone(FReasonClone);
+end;
+
+function TFailureReason.Clone(E: Exception): Exception;
+begin
+  Result := E.ClassType.Create as Exception;
+  Result.Message := E.Message;
+  Result.HelpContext := E.HelpContext;
 end;
 
 constructor TFailureReason.Create(const AReason: TObject);
@@ -68,6 +89,8 @@ destructor TFailureReason.Destroy;
 begin
   if Assigned(FReason) then
     FreeAndNil(FReason);
+  if Assigned(FReasonClone) then
+    FreeAndNil(FReasonClone);
   inherited;
 end;
 

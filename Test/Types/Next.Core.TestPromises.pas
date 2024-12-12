@@ -33,6 +33,10 @@ type
     procedure RaiseInMultiplDoneWithAwait;
     [Test]
     procedure RaiseInDoneWithAwaitInAnotherThread;
+    [Test]
+    procedure ExpectMultipleAwaitOnRejectedPromiseWillRaise;
+    [Test]
+    procedure ExpectMultipleAwaitOnRejectedPromiseWillRaiseSameType;
   end;
 
   [TestFixture]
@@ -781,6 +785,41 @@ begin
 end;
 
 { TTestPromiseException }
+
+procedure TTestPromiseException<T>.ExpectMultipleAwaitOnRejectedPromiseWillRaise;
+var
+  LPromise: IPromise<T>;
+  LOldExceptionEvent: TExceptionEvent;
+begin
+  LOldExceptionEvent := Application.OnException;
+  Application.OnException := Self.MyExceptionHandler;
+  try
+    LPromise := Promise.Resolve<T>(function: T begin Result := CreateValue(1) end)
+      .Main.ThenBy(function(const I: T): T begin
+      raise ETestException.Create('error');
+      end);
+
+    //Await should raise the exception
+    Assert.WillRaise(procedure begin LPromise.Await end);
+    Assert.AreNotEqual(wrSignaled, FExceptionSignal.WaitFor(1));
+
+    //Await should raise the exception again
+    Assert.WillRaise(procedure begin LPromise.Await end);
+    Assert.AreNotEqual(wrSignaled, FExceptionSignal.WaitFor(1));
+  finally
+    Application.OnException := LOldExceptionEvent;
+  end;
+end;
+
+procedure TTestPromiseException<T>.ExpectMultipleAwaitOnRejectedPromiseWillRaiseSameType;
+var
+  LPromise: IPromise<T>;
+begin
+  LPromise := Promise.Reject<T>(ETestException.Create('error message'));
+  Assert.WillRaiseWithMessage(procedure begin LPromise.Await end, ETestException, 'error message');
+  Assert.WillRaiseWithMessage(procedure begin LPromise.Await end, ETestException, 'error message');
+  Assert.WillRaiseWithMessage(procedure begin LPromise.Await end, ETestException, 'error message');
+end;
 
 procedure TTestPromiseException<T>.MyExceptionHandler(Sender: TObject;
   E: Exception);
