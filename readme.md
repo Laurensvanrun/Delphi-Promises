@@ -330,40 +330,7 @@ The `.Await` operator is used to retrieve the value from a resolved promise. The
 
 Due to the blocking nature of `.Await`, it is advised to use it in the main thread context as little as possible. If you use it in the main thread context, a `CheckSynchronize` method is repeatedly executed until the promise is fulfilled. This makes sure that UI interaction, such as repaints, will continue while your code flow is interrupted. The better way is to use messages to notify the UI of changes, see the examples below.
 
-## Exception handling
-
-If any exceptions occurs, the chain will be interrupted until the first `.Catch` in the chain. If there is no catch, the promise will be rejected. Calling `.Await` on a rejected promise will raise the exception that was caught inside the promise in the caller context.
-
-### Recover from exceptions
-
-Use the `.Catch` method to recover from any exception in the chain.
-
-```delphi
-uses Next.Core.Promises;
-
-// Handling exceptions and synchronizing error handling to the main thread
-begin
-  Promise.Resolve<Boolean>(function: Boolean
-    begin
-      raise Exception.Create('Simulated error');
-    end)
-  .Catch<Boolean>(function(E: Exception): Boolean
-    begin
-      if E.Message = 'Simulated error' then
-        Result := False // Recover from the error condition
-      else
-        raise; // Re-throw for other exceptions
-    end)
-  .Main.ThenBy<TVoid>(function(const value: Boolean): TVoid
-    begin
-      if not value then
-        WriteLn('Error handled, alternative value provided.'); // UI handling in the main thread
-      Result := Void; // Setting result to Void correctly
-    end);
-end;
-```
-
-### Waiting for multiple promises to resolve
+### Promise.All, waiting for multiple promises to resolve
 
 If you perform multiple background operations you might want to wait until all of them are completed and then perform some action on it. You can use `Promise.All` for this. This waits until all promises are fulfilled. If one of the promises rejects (raises an exception), it will immediately go to the first `.Catch` in the chain without waiting for the rest of the promises to be fulfilled.
 
@@ -403,6 +370,65 @@ Promise.All<Integer>([LWidth, LHeight, LDepth])
 
 //Here you can continue your codeflow, for example show a waiting indicator
 ```
+
+## Exception handling
+
+If any exceptions occurs, the chain will be interrupted until the first `.Catch` in the chain. If there is no catch, the promise will be rejected. Calling `.Await` on a rejected promise will raise the exception that was caught inside the promise in the caller context.
+
+### Recover from exceptions
+
+Use the `.Catch` method to recover from any exception in the chain.
+
+```delphi
+uses Next.Core.Promises;
+
+// Handling exceptions and synchronizing error handling to the main thread
+begin
+  Promise.Resolve<Boolean>(function: Boolean
+    begin
+      raise Exception.Create('Simulated error');
+    end)
+  .Catch<Boolean>(function(E: Exception): Boolean
+    begin
+      if E.Message = 'Simulated error' then
+        Result := False // Recover from the error condition
+      else
+        raise; // Re-throw for other exceptions
+    end)
+  .Main.ThenBy<TVoid>(function(const value: Boolean): TVoid
+    begin
+      if not value then
+        WriteLn('Error handled, alternative value provided.'); // UI handling in the main thread
+      Result := Void; // Setting result to Void correctly
+    end);
+end;
+```
+
+### Handling `.Await` on Rejected Promises
+
+When using the `.Await` method on a rejected promise, take note of the following behavior:
+
+1. **First Call to `.Await`:**
+   - The first call to `.Await` raises the original exception that was caught inside the promise.
+   - Depending on the debugging framework you use (e.g., MadExcept, EurekaLog, JclDebug), this exception may include the original stack trace where the exception occurred. This can be invaluable for debugging purposes.
+
+2. **Subsequent Calls to `.Await`:**
+   - Any consecutive calls to `.Await` on the same promise will raise a *clone* of the original exception.
+   - The cloned exception preserves the original exception’s class type and message, but:
+     - It does **not** retain the original stack trace.
+     - It does **not** include any additional fields or custom properties that may be defined in the exception's child class.
+
+#### Important Notes:
+- This behavior ensures that the promise remains consistent and does not retain unnecessary state after the first `.Await` call.
+- If your application relies on debugging tools for stack trace analysis, always capture and handle the exception from the first `.Await` call.
+- Avoid relying on child-class-specific fields in exceptions when dealing with rejected promises, as these fields will not be preserved in cloned exceptions during subsequent `.Await` calls.
+
+#### Best Practices:
+- **Debugging:** Use the debugging tools (e.g., MadExcept, EurekaLog) to capture detailed exception information during the first `.Await` call.
+- **Exception Logging:** If you need to log exceptions, do so during the first `.Await` call to ensure the most complete information is available.
+- **Avoid Multiple Awaits:** Design your promise workflows to minimize redundant `.Await` calls on the same rejected promise, as the additional calls will provide limited diagnostic value.
+
+By understanding and respecting these nuances, you can effectively handle exceptions in your promise-based implementations in Delphi.
 
 ## UI interaction
 
