@@ -156,14 +156,18 @@ end;
 procedure TDisposableValue<T>.TryDisposeArray<T2>(const AOther: T2);
 type
   PObject = ^TObject;
+var
+  i: Integer;
+  LValue, LArrayElement: TValue;
+  LObject: TObject;
 begin
-  var LValue := TValue.From<T>(FValue);
+  LValue := TValue.From<T>(FValue);
 
-  for var i := 0 to LValue.GetArrayLength - 1 do begin
-    var LArrayElement := LValue.GetArrayElement(i);
+  for i := 0 to LValue.GetArrayLength - 1 do begin
+    LArrayElement := LValue.GetArrayElement(i);
 
     if LArrayElement.Kind = tkClass then begin
-      var LObject := LArrayElement.AsObject;
+      LObject := LArrayElement.AsObject;
 
       case GetTypeKind(T2) of
 
@@ -186,10 +190,13 @@ procedure TDisposableValue<T>.TryDisposeObject<T2>(const AOther: T2);
 type
   PObject = ^TObject;
   PIntf = ^IInterface;
+var
+  LIntf: IInterface;
+  LObj: TObject;
 begin
   if (GetTypeKind(T2) = tkInterface) then begin
-    var LIntf := (PIntf(@AOther)^ as IInterface);
-    var LObj := LIntf as TObject;
+    LIntf := (PIntf(@AOther)^ as IInterface);
+    LObj := LIntf as TObject;
     if (PObject(@FValue)^ <> PObject(@LObj)^) then
       DisposeP(FValue)
     else
@@ -199,13 +206,16 @@ begin
 end;
 
 function TDisposableValue<T>.ObjectInArray<T2>(const AObject: TObject; const AArray: T2): Boolean;
+var
+  LArray, LArrayElement: TValue;
+  j: Integer;
 begin
   Result := False;
 
-  var LArray := TValue.From<T2>(AArray);
-  for var j := 0 to LArray.GetArrayLength - 1 do begin
+  LArray := TValue.From<T2>(AArray);
+  for j := 0 to LArray.GetArrayLength - 1 do begin
 
-    var LArrayElement := LArray.GetArrayElement(j);
+    LArrayElement := LArray.GetArrayElement(j);
     if (LArrayElement.Kind = tkClass) then
 
       if LArray.GetArrayElement(j).AsObject = AObject then

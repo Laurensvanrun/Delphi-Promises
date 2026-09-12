@@ -381,15 +381,12 @@ begin
 end;
 
 function TAbstractPromise<T>.Await: T;
-var
-  LException: Exception;
 begin
   InternalWait;
 
   System.TMonitor.Enter(Self);
   try
     if State = psRejected then begin
-      LException := GetFailure.Reason;
       raise GetFailure.DetachExceptionObject;
     end else if State = psFullfilled then begin
       Result := FValue;
@@ -514,6 +511,7 @@ const
   MT_SYNC_WAIT = 10;
 var
   LRunning: Cardinal;
+  LResult: TWaitResult;
 begin
   if State = psPending then begin
     if TThread.CurrentThread.ThreadID = MainThreadID then begin
@@ -523,7 +521,7 @@ begin
         LRunning := LRunning + MT_SIGNAL_WAIT + MT_SYNC_WAIT;
       end;
     end else begin
-      var LResult := FSignal.WaitFor(ATimeout);
+      LResult := FSignal.WaitFor(ATimeout);
       if LResult <> TWaitResult.wrSignaled then
         raise EInternalWaitProblem.Create('Issue waiting for signal (not set before timeout?): ' + GetEnumName(TypeInfo(TWaitResult), Ord(LResult)));
     end;
@@ -975,6 +973,13 @@ var
 {$ENDIF}
 {$IFNDEF MSWINDOWS}
   LEvents: Array[0..1] of THandleObject;
+{$ENDIF}
+  LCancel: Boolean;
+  i: Integer;
+  LThread: TPromiseThread;
+  LWaitResult: Integer;
+  LRevisionBefore, LRevisionAfter: Int64;
+{$IFNDEF MSWINDOWS}
 const
   WAIT_OBJECT_0 = 0;
 {$ENDIF}
@@ -987,24 +992,24 @@ begin
   LEvents[0] := FCancel;
   LEvents[1] := FSignalController;
 {$ENDIF}
-  var LCancel := False;
+  LCancel := False;
 
-  for var i := 0 to MIN_POOL_SIZE - 1 do
+  for i := 0 to MIN_POOL_SIZE - 1 do
     AddThread();
 
   while (not LCancel) do begin
 {$IFDEF MSWINDOWS}
-    const LWaitResult = WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
+    LWaitResult := WaitForMultipleObjectsEx(2, @LEvents, False, INFINITE, False);
 {$ENDIF}
 {$IFNDEF MSWINDOWS}
-    const LWaitResult = WaitForMultipleEvents(LEvents);
+    LWaitResult := WaitForMultipleEvents(LEvents);
 {$ENDIF}
     case LWaitResult of
       WAIT_OBJECT_0: LCancel := True;
 
       WAIT_OBJECT_0 + 1: begin
         FSignalController.ResetEvent;
-        const LRevisionBefore = TInterlocked.Read(FSignalControllerRevision);
+        LRevisionBefore := TInterlocked.Read(FSignalControllerRevision);
 
         if GrowPool() then begin
           //Take it easy, only grow/shrink every 100ms
@@ -1012,14 +1017,14 @@ begin
             LCancel := True;
         end;
 
-        const LRevisionAfter = TInterlocked.Read(FSignalControllerRevision);
+        LRevisionAfter := TInterlocked.Read(FSignalControllerRevision);
         if LRevisionBefore <> LRevisionAfter then
           SignalControllerIf();
       end;
     end;
   end;
 
-  for var LThread in FThreads do begin
+  for LThread in FThreads do begin
     LThread.Cancel;
     LThread.WaitFor;
     LThread.Free;
