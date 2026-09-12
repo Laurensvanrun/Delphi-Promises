@@ -16,6 +16,8 @@ uses
   DUnitX.TestFramework,
   Next.Core.DisposableValue in '..\Core\Types\Next.Core.DisposableValue.pas',
   Next.Core.FailureReason in '..\Core\Types\Next.Core.FailureReason.pas',
+  Next.Core.Promises.Exceptions in '..\Core\Types\Next.Core.Promises.Exceptions.pas',
+  Next.Core.Promises.Cancellation in '..\Core\Types\Next.Core.Promises.Cancellation.pas',
   Next.Core.Promises in '..\Core\Types\Next.Core.Promises.pas',
   Next.Core.TTry in '..\Core\Types\Next.Core.TTry.pas',
   Next.Core.Void in '..\Core\Types\Next.Core.Void.pas',
@@ -25,7 +27,14 @@ uses
   Next.Core.TestPromises in 'Types\Next.Core.TestPromises.pas',
   Next.Core.TestVoid in 'Types\Next.Core.TestVoid.pas',
   Next.Core.Test.GenericTest in 'Next.Core.Test.GenericTest.pas',
-  Next.Core.TestTry in 'Types\Next.Core.TestTry.pas';
+  Next.Core.TestTry in 'Types\Next.Core.TestTry.pas',
+  TestPromiseRace in 'Types\TestPromiseRace.pas',
+  TestPromiseAny in 'Types\TestPromiseAny.pas',
+  TestPromiseAllSettled in 'Types\TestPromiseAllSettled.pas',
+  TestPromiseFinally in 'Types\TestPromiseFinally.pas',
+  TestPromiseCancellation in 'Types\TestPromiseCancellation.pas',
+  TestPromiseTimeout in 'Types\TestPromiseTimeout.pas',
+  TestPromiseExceptions in 'Types\TestPromiseExceptions.pas';
 
 {$IFNDEF TESTINSIGHT}
 var

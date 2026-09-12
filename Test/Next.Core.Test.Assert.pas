@@ -1,5 +1,9 @@
 unit Next.Core.Test.Assert;
 
+// Enable this define if Spring4D is available in the project search path.
+// When disabled, equivalent RTTI-based logic is used instead.
+{.$DEFINE SPRING4D}
+
 interface
 
 uses
@@ -77,7 +81,10 @@ implementation
 
 uses
   DUnitX.ResStrs, System.DateUtils, Delphi.Mocks.Helpers, System.TypInfo,
-  Spring.Reflection, System.Generics.Defaults, System.Math, System.Types;
+{$IFDEF SPRING4D}
+  Spring.Reflection,
+{$ENDIF}
+  System.Generics.Defaults, System.Math, System.Types;
 
 { Assert }
 
@@ -88,7 +95,11 @@ end;
 
 class procedure Assert.AreEqual<T>(const expected, actual: T; const AMessage: string);
 begin
+{$IFDEF SPRING4D}
   if IsGeneric(TType.GetType(System.TypeInfo(T)), 'TList<>') then
+{$ELSE}
+  if IsGeneric(TRttiContext.Create.GetType(System.TypeInfo(T)), 'TList<>') then
+{$ENDIF}
     AreEqualLists(TValue.From<T>(expected), TValue.From<T>(actual), AMessage)
   else
     AreEqualCore(TValue.From<T>(expected), TValue.From<T>(actual), AMessage);
@@ -111,23 +122,38 @@ begin
   var LGetCount := GenericCountProperty(expected.RttiType);
   var LGetItem := GenericGetItemMethod(expected.RttiType);
 
+{$IFDEF SPRING4D}
   Assert.AreEqual(LGetCount.GetValue(expected).AsInteger,
     LGetCount.GetValue(actual).AsInteger, AMessage);
 
   for var i := 0 to LGetCount.GetValue(expected).AsInteger - 1 do
+{$ELSE}
+  Assert.AreEqual(LGetCount.GetValue(expected.AsObject).AsInteger,
+    LGetCount.GetValue(actual.AsObject).AsInteger, AMessage);
+
+  for var i := 0 to LGetCount.GetValue(expected.AsObject).AsInteger - 1 do
+{$ENDIF}
     Assert.AreEqualCore(LGetItem.Invoke(expected, [TValue.From<Integer>(i)]),
       LGetItem.Invoke(actual, [TValue.From<Integer>(i)]), AMessage);
 end;
 
 class procedure Assert.AreNotEqual<T>(const expected, actual: T; const AMessage: string);
 begin
+{$IFDEF SPRING4D}
   if IsGeneric(TType.GetType(System.TypeInfo(T)), 'TList<>') then
+{$ELSE}
+  if IsGeneric(TRttiContext.Create.GetType(System.TypeInfo(T)), 'TList<>') then
+{$ENDIF}
     AreNotEqualLists(TValue.From<T>(expected), TValue.From<T>(actual), AMessage)
   else
     AreNotEqualCore(TValue.From<T>(expected), TValue.From<T>(actual), AMessage);
 end;
 
 class procedure Assert.AreNotEqualCore(const expected, actual: TValue; const AMessage: string);
+{$IFNDEF SPRING4D}
+const
+  SEqualsErrorStr2 = 'Expected value and actual value should not be equal. Expected: %s Actual: %s %s';
+{$ENDIF}
 begin
   DoAssert;
   if expected.Equals(actual) then
@@ -139,10 +165,17 @@ begin
   var LGetCount := GenericCountProperty(expected.RttiType);
   var LGetItem := GenericGetItemMethod(expected.RttiType);
 
+{$IFDEF SPRING4D}
   Assert.AreNotEqual(LGetCount.GetValue(expected).AsInteger,
     LGetCount.GetValue(actual).AsInteger, AMessage);
 
   for var i := 0 to LGetCount.GetValue(expected).AsInteger - 1 do
+{$ELSE}
+  Assert.AreNotEqual(LGetCount.GetValue(expected.AsObject).AsInteger,
+    LGetCount.GetValue(actual.AsObject).AsInteger, AMessage);
+
+  for var i := 0 to LGetCount.GetValue(expected.AsObject).AsInteger - 1 do
+{$ENDIF}
     Assert.AreNotEqualCore(LGetItem.Invoke(expected, [TValue.From<Integer>(i)]),
       LGetItem.Invoke(actual, [TValue.From<Integer>(i)]), AMessage);
 end;
@@ -166,8 +199,13 @@ class function Assert.GenericGetItemMethod(AType: TRttiType): TRttiMethod;
 begin
   Result := nil;
   for var LMethod in AType.GetMethods('GetItem') do
+{$IFDEF SPRING4D}
     if (LMethod.ParameterCount = 1) and (LMethod.Parameters[0].ParamType.TypeKind = tkInteger)
       and (LMethod.ReturnType = AType.GetGenericArguments[0]) then
+{$ELSE}
+    if (Length(LMethod.GetParameters) = 1) and (LMethod.GetParameters[0].ParamType.TypeKind = tkInteger)
+      and Assigned(LMethod.ReturnType) then
+{$ENDIF}
       Exit(LMethod);
 end;
 
@@ -180,7 +218,13 @@ end;
 
 class function Assert.IsGeneric(const AClassType: TRttiType; const AGenericName: String): Boolean;
 begin
+{$IFDEF SPRING4D}
   Result := AClassType.IsGenericTypeOf(AGenericName);
+{$ELSE}
+  // AGenericName is e.g. 'TList<>' - match type names like 'TList<System.Integer>'
+  var LPrefix := AGenericName.Replace('>', ''); // 'TList<>' -> 'TList<'
+  Result := AClassType.Name.StartsWith(LPrefix);
+{$ENDIF}
 
   if not Result then begin
     var baseType := AClassType.BaseType;

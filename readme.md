@@ -3,10 +3,14 @@
 ## Table of Contents
 
  1. [Getting started](#getting-started)
- 2. [Exception handling](#exception-handling)
- 3. [UI interaction](#ui-interaction)
- 4. [Memory Management](#memory-management)
- 5. [Extended example: using Promises in Asynchronous Methods](#extended-example-using-promises-in-asynchronous-methods)
+ 2. [Combinators: Race, Any, AllSettled](#combinators-race-any-allsettled)
+ 3. [Timeout](#timeout)
+ 4. [Cancellation](#cancellation)
+ 5. [Finally](#finally)
+ 6. [Exception handling](#exception-handling)
+ 7. [UI interaction](#ui-interaction)
+ 8. [Memory Management](#memory-management)
+ 9. [Extended example: using Promises in Asynchronous Methods](#extended-example-using-promises-in-asynchronous-methods)
 
 ## Overview
 
@@ -15,10 +19,14 @@ This Delphi library implements promises, enabling asynchronous programming by fa
 ## Features
 
 - **Promise Chaining:** Easily chain multiple asynchronous operations, passing the result of one as the input to the next.
-- **Exception handling:** The promise is side-affect free, so it manages exceptions inside the chain and you are able to recover from them. 
+- **Exception handling:** The promise is side-affect free, so it manages exceptions inside the chain and you are able to recover from them.
 - **Type Transformation:** Transform the resolved value's type through the `.Op` method, enabling flexible data handling.
 - **Memory Management:** Control the lifecycle of promise-resolved values with `dvKeep` and `dvFree` directives, ensuring efficient resource utilization.
 - **Starts immediately:** The promise execution starts immediately, you do not have to call `Await` to execute the chain.
+- **Combinators:** `Promise.Race`, `Promise.Any`, and `Promise.AllSettled` for coordinating multiple concurrent promises.
+- **Timeout:** Reject a promise automatically if it doesn't settle within a time limit.
+- **Cancellation:** Cooperative cancellation via `ICancellationToken` with `CancelToken`, `OnCancelled`, and `ThrowIfCancelled`.
+- **Finally:** Run cleanup logic after a promise settles, regardless of whether it resolved or rejected.
 
 ## Getting Started
 
@@ -370,6 +378,345 @@ Promise.All<Integer>([LWidth, LHeight, LDepth])
 
 //Here you can continue your codeflow, for example show a waiting indicator
 ```
+
+## Combinators: Race, Any, AllSettled
+
+In addition to `Promise.All`, the library provides three combinators for coordinating multiple concurrent promises. These mirror the JavaScript `Promise.Race`, `Promise.any`, and `Promise.allSettled` APIs.
+
+### Promise.Race
+
+Returns a promise that settles as soon as the **first** input promise settles (resolves or rejects). The remaining promises continue executing but their results are ignored.
+
+```delphi
+uses Next.Core.Promises;
+
+var
+  LFast := Promise.Resolve<Integer>(function: Integer
+    begin
+      Sleep(100);
+      Result := 42;
+    end);
+
+var
+  LSlow := Promise.Resolve<Integer>(function: Integer
+    begin
+      Sleep(5000);
+      Result := 99;
+    end);
+
+var
+  LWinner: Integer;
+begin
+  LWinner := Promise.Race<Integer>([LFast, LSlow]).Await;
+  WriteLn(LWinner); // 42 — the fast promise won
+end;
+```
+
+If the first promise to settle rejects, the race promise also rejects:
+
+```delphi
+var LPromise := Promise.Race<Integer>([
+  Promise.Reject<Integer>(Exception.Create('fast error')),
+  Promise.Resolve<Integer>(function: Integer
+    begin
+      Sleep(1000);
+      Result := 42;
+    end)
+]);
+
+// LPromise is rejected with 'fast error'
+```
+
+Passing an empty array rejects with `EArgumentException`.
+
+| Delphi | JavaScript |
+|--------|-----------|
+| `Promise.Race<T>([...])` | `Promise.race([...])` |
+| First settled wins (resolve or reject) | First settled wins (resolve or reject) |
+| Empty array → `EArgumentException` | Empty array → forever pending |
+
+### Promise.Any
+
+Returns a promise that resolves with the value of the **first promise that resolves successfully**. Rejections are collected silently. Only if **all** promises reject does the returned promise reject with `EAggregateException` containing all individual exceptions.
+
+```delphi
+uses Next.Core.Promises, Next.Core.Promises.Exceptions;
+
+// Two fail, one succeeds → Any resolves with the successful one
+var LResult := Promise.Any<String>([
+  Promise.Reject<String>(Exception.Create('error 1')),
+  Promise.Resolve<String>(function: String
+    begin
+      Result := 'success!';
+    end),
+  Promise.Reject<String>(Exception.Create('error 2'))
+]).Await;
+
+WriteLn(LResult); // 'success!'
+```
+
+When all reject:
+
+```delphi
+try
+  Promise.Any<Integer>([
+    Promise.Reject<Integer>(Exception.Create('err1')),
+    Promise.Reject<Integer>(Exception.Create('err2'))
+  ]).Await;
+except
+  on E: EAggregateException do
+  begin
+    WriteLn(E.Exceptions[0].Message); // 'err1'
+    WriteLn(E.Exceptions[1].Message); // 'err2'
+  end;
+end;
+```
+
+Passing an empty array rejects with `EArgumentException`.
+
+| Delphi | JavaScript |
+|--------|-----------|
+| `Promise.Any<T>([...])` | `Promise.any([...])` |
+| First resolve wins | First resolve wins |
+| All reject → `EAggregateException` | All reject → `AggregateError` |
+
+### Promise.AllSettled
+
+Waits for **all** promises to settle (resolve or reject). Never short-circuits. Returns an array of `TPromiseSettledResult<T>` records preserving the original order.
+
+```delphi
+uses Next.Core.Promises;
+
+var LResults := Promise.AllSettled<Integer>([
+  Promise.Resolve<Integer>(function: Integer begin Result := 1 end),
+  Promise.Reject<Integer>(Exception.Create('failed')),
+  Promise.Resolve<Integer>(function: Integer begin Result := 3 end)
+]).Await;
+
+for var R in LResults do
+begin
+  if R.Status = TPromiseStatus.psResolved then
+    WriteLn('Resolved: ', R.Value)
+  else
+    WriteLn('Rejected: ', R.Error.Message);
+end;
+
+// Output:
+//   Resolved: 1
+//   Rejected: failed
+//   Resolved: 3
+```
+
+Each `TPromiseSettledResult<T>` has:
+- `Status`: `TPromiseStatus.psResolved` or `TPromiseStatus.psRejected`
+- `Value`: the resolved value (only meaningful when `Status = psResolved`)
+- `Error`: the exception (only meaningful when `Status = psRejected`)
+
+Passing an empty array resolves immediately with an empty result array.
+
+| Delphi | JavaScript |
+|--------|-----------|
+| `Promise.AllSettled<T>([...])` | `Promise.allSettled([...])` |
+| Returns `TArray<TPromiseSettledResult<T>>` | Returns array of `{status, value/reason}` |
+| Empty array → resolves with `[]` | Empty array → resolves with `[]` |
+
+## Timeout
+
+Attach a timeout to any promise with `.Timeout(milliseconds)`. If the promise doesn't settle within the specified time, it rejects with `ETimeoutException`.
+
+```delphi
+uses Next.Core.Promises, Next.Core.Promises.Exceptions;
+
+var LPromise := Promise.Resolve<String>(function: String
+  begin
+    Sleep(10000); // Slow operation
+    Result := 'done';
+  end)
+.Timeout(2000); // 2 second timeout
+
+try
+  LPromise.Await;
+except
+  on E: ETimeoutException do
+    WriteLn(E.Message); // 'Promise timed out'
+end;
+```
+
+You can provide a custom timeout message:
+
+```delphi
+.Timeout(5000, 'Data fetch exceeded 5 seconds')
+```
+
+Timeout works by internally using `Promise.Race` between the original promise and a timer promise. If the original resolves first, the timeout is harmless. Timeout can be combined with chaining:
+
+```delphi
+Promise.Resolve<Integer>(function: Integer
+  begin
+    Sleep(100);
+    Result := 42;
+  end)
+.Timeout(5000)
+.ThenBy(function(const V: Integer): Integer
+  begin
+    Result := V * 2;
+  end)
+.Await; // Returns 84
+```
+
+## Cancellation
+
+Cooperative cancellation lets you signal a running promise to stop. It uses two interfaces:
+
+- `ICancellationTokenSource` — created by the caller, provides `Cancel` and `Token`
+- `ICancellationToken` — passed into the promise, provides `IsCancelled` and `ThrowIfCancelled`
+
+```delphi
+uses Next.Core.Promises, Next.Core.Promises.Cancellation, Next.Core.Promises.Exceptions;
+```
+
+### Basic cancellation
+
+```delphi
+var
+  Cts: ICancellationTokenSource;
+begin
+  Cts := TCancellationTokenSource.Create;
+
+  var LPromise := Promise.Resolve<Integer>(function: Integer
+    begin
+      Sleep(5000);
+      Result := 42;
+    end)
+  .CancelToken(Cts.Token);
+
+  // Cancel before the promise completes
+  Cts.Cancel;
+
+  try
+    LPromise.Await;
+  except
+    on E: EOperationCancelled do
+      WriteLn('Promise was cancelled');
+  end;
+end;
+```
+
+### Cooperative cancellation with ThrowIfCancelled
+
+For long-running operations, check for cancellation periodically:
+
+```delphi
+var
+  Cts: ICancellationTokenSource;
+begin
+  Cts := TCancellationTokenSource.Create;
+
+  var LPromise := Promise.Resolve<Integer>(function: Integer
+    var Token: ICancellationToken;
+    begin
+      Token := Cts.Token;
+      for var i := 1 to 1000 do
+      begin
+        Token.ThrowIfCancelled; // Raises EOperationCancelled if cancelled
+        Sleep(10); // Simulate work
+      end;
+      Result := 42;
+    end)
+  .CancelToken(Cts.Token);
+
+  // Cancel after 500ms from another thread
+  TThread.CreateAnonymousThread(procedure
+    begin
+      Sleep(500);
+      Cts.Cancel;
+    end).Start;
+end;
+```
+
+### OnCancelled handler
+
+Register a handler that fires only on cancellation — syntactic sugar for a `.Catch` that filters for `EOperationCancelled`:
+
+```delphi
+Promise.Resolve<Integer>(function: Integer
+  begin
+    Sleep(5000);
+    Result := 42;
+  end)
+.CancelToken(Cts.Token)
+.OnCancelled(procedure
+  begin
+    WriteLn('Operation was cancelled — cleaning up');
+  end);
+```
+
+### Cancellation token properties
+
+| Method | Description |
+|--------|-------------|
+| `Cts.Cancel` | Signals cancellation (idempotent — safe to call multiple times) |
+| `Cts.Token` | Returns the `ICancellationToken` to pass into promises |
+| `Token.IsCancelled` | Returns `True` if cancellation has been requested |
+| `Token.ThrowIfCancelled` | Raises `EOperationCancelled` if cancelled |
+
+## Finally
+
+`.Finally` runs a cleanup procedure after a promise settles, regardless of whether it resolved or rejected. The settled value (or rejection) is preserved and passed through.
+
+```delphi
+uses Next.Core.Promises;
+
+var LLoading := True;
+
+Promise.Resolve<String>(function: String
+  begin
+    Result := 'data loaded';
+  end)
+.&Finally(procedure
+  begin
+    LLoading := False; // Always runs — good for cleanup
+  end)
+.ThenBy(procedure(const V: String)
+  begin
+    WriteLn(V); // 'data loaded' — value passes through Finally
+  end);
+```
+
+Note the `&` prefix: `Finally` is a reserved word in Delphi, so it must be escaped as `&Finally`.
+
+If the `Finally` handler raises an exception, it **replaces** the original result:
+
+```delphi
+// Original resolve is replaced by the Finally exception
+Promise.Resolve<Integer>(function: Integer
+  begin
+    Result := 42;
+  end)
+.&Finally(procedure
+  begin
+    raise Exception.Create('cleanup failed');
+  end);
+// Promise is now rejected with 'cleanup failed'
+```
+
+If the `Finally` handler completes normally, the original result passes through unchanged — even if the promise was rejected:
+
+```delphi
+// Rejection passes through Finally unchanged
+Promise.Reject<Integer>(Exception.Create('original error'))
+.&Finally(procedure
+  begin
+    WriteLn('cleanup runs'); // Runs, does not affect the rejection
+  end);
+// Promise is still rejected with 'original error'
+```
+
+| Delphi | JavaScript |
+|--------|-----------|
+| `.&Finally(procedure begin ... end)` | `.finally(() => { ... })` |
+| Exception in handler replaces result | Exception in handler replaces result |
+| Normal completion preserves result | Normal completion preserves result |
 
 ## Exception handling
 

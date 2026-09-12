@@ -104,6 +104,15 @@
         <DCCReference Include="Types\Next.Core.TestVoid.pas"/>
         <DCCReference Include="Next.Core.Test.GenericTest.pas"/>
         <DCCReference Include="Types\Next.Core.TestTry.pas"/>
+        <DCCReference Include="..\Core\Types\Next.Core.Promises.Exceptions.pas"/>
+        <DCCReference Include="..\Core\Types\Next.Core.Promises.Cancellation.pas"/>
+        <DCCReference Include="Types\TestPromiseRace.pas"/>
+        <DCCReference Include="Types\TestPromiseAny.pas"/>
+        <DCCReference Include="Types\TestPromiseAllSettled.pas"/>
+        <DCCReference Include="Types\TestPromiseFinally.pas"/>
+        <DCCReference Include="Types\TestPromiseCancellation.pas"/>
+        <DCCReference Include="Types\TestPromiseTimeout.pas"/>
+        <DCCReference Include="Types\TestPromiseExceptions.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

@@ -5,7 +5,7 @@ interface
 uses
   System.Generics.Collections, System.SysUtils, System.SyncObjs, System.Rtti,
   System.Threading, Next.Core.FailureReason, Next.Core.DisposableValue,
-  System.Classes;
+  System.Classes, Next.Core.Promises.Exceptions, Next.Core.Promises.Cancellation;
 
 type
   ENotFullfilledAfterAwait = class(Exception);
@@ -14,6 +14,25 @@ type
 {$REGION 'Interfaces'}
   TPromiseState = (psPending, psFullfilled, psRejected);
   TDisposeValue = (dvFree, dvKeep, dvAssign);
+
+  /// <summary>
+  /// Status used in TPromiseSettledResult to indicate whether a promise resolved or rejected.
+  /// </summary>
+  {$SCOPEDENUMS ON}
+  TPromiseStatus = (psResolved, psRejected);
+  {$SCOPEDENUMS OFF}
+
+  /// <summary>
+  /// Result record for Promise.AllSettled. Contains the status and either the resolved value or rejection error.
+  /// </summary>
+  TPromiseSettledResult<T> = record
+    /// <summary>The settlement status: psResolved or psRejected.</summary>
+    Status: TPromiseStatus;
+    /// <summary>The resolved value. Only valid when Status = psResolved.</summary>
+    Value: T;
+    /// <summary>The rejection exception. Only valid when Status = psRejected. NOT owned by this record.</summary>
+    Error: Exception;
+  end;
 
   TConstFunc<T,TResult> = reference to function (const Arg1: T): TResult;
   TConstProc<T> = reference to procedure (const Arg1: T);
@@ -101,6 +120,27 @@ type
 
     function &Finally(AProc: TProc): IPromise<T>;
 
+    /// <summary>
+    /// Attaches a cancellation token to this promise. When the token is cancelled,
+    /// subsequent chain steps will be skipped and the promise rejects with EOperationCancelled.
+    /// </summary>
+    function CancelToken(const AToken: ICancellationToken): IPromise<T>;
+    /// <summary>
+    /// Returns True if the promise has been cancelled via a cancellation token.
+    /// </summary>
+    function IsCancelled: Boolean;
+    /// <summary>
+    /// Registers a handler that fires only when the promise is cancelled (rejected with EOperationCancelled).
+    /// Syntactic sugar for a Catch that filters for EOperationCancelled.
+    /// </summary>
+    function OnCancelled(AProc: TProc): IPromise<T>;
+
+    /// <summary>
+    /// Returns a new promise that rejects with ETimeoutException if this promise
+    /// does not settle within the specified time in milliseconds.
+    /// </summary>
+    function Timeout(AMilliseconds: Cardinal; const AMessage: string = 'Promise timed out'): IPromise<T>;
+
     function Await: T;
   end;
 {$ENDREGION}
@@ -112,6 +152,7 @@ type
     FValue: TDisposableValue<T>;
     FFailure: IFailureReason;
     FSignal: TEvent;
+    FToken: ICancellationToken;
 {$IFDEF DEBUG}
     FPromiseNo: Integer;
     FPreviousPromiseNo: Integer;
@@ -156,6 +197,12 @@ type
     function Catch(AProc: TProc<Exception>): IPromise<T>; overload;
 
     function &Finally(AProc: TProc): IPromise<T>;
+
+    function CancelToken(const AToken: ICancellationToken): IPromise<T>;
+    function IsCancelled: Boolean;
+    function OnCancelled(AProc: TProc): IPromise<T>;
+
+    function Timeout(AMilliseconds: Cardinal; const AMessage: string = 'Promise timed out'): IPromise<T>;
 
     function Await: T;
 
@@ -308,6 +355,24 @@ type
     class function All<T>(const AArray: TArray<IPromise<T>>): IPromise<TArray<T>>; overload;
     class function Resolve<T>(AFunc: TFunc<T>): IPromise<T>; overload;
     class function Reject<T>(E: Exception): IPromise<T>;
+
+    /// <summary>
+    /// Returns a promise that resolves or rejects as soon as the first promise in the array settles.
+    /// The remaining promises continue executing but their results are ignored.
+    /// </summary>
+    class function Race<T>(const APromises: TArray<IPromise<T>>): IPromise<T>;
+
+    /// <summary>
+    /// Returns a promise that resolves with the value of the first promise that resolves successfully.
+    /// If all promises reject, rejects with EAggregateException containing all individual exceptions.
+    /// </summary>
+    class function Any<T>(const APromises: TArray<IPromise<T>>): IPromise<T>;
+
+    /// <summary>
+    /// Waits for all promises to settle (resolve or reject) and returns an array of results.
+    /// Never short-circuits on rejection. Results are in the same order as input promises.
+    /// </summary>
+    class function AllSettled<T>(const APromises: TArray<IPromise<T>>): IPromise<TArray<TPromiseSettledResult<T>>>;
   end;
 
   procedure CreatePromiseSchedulerIf;
@@ -380,6 +445,67 @@ begin
     .Catch(procedure(E: Exception) begin AProc(); end);
 end;
 
+function TAbstractPromise<T>.CancelToken(const AToken: ICancellationToken): IPromise<T>;
+begin
+  System.TMonitor.Enter(Self);
+  try
+    FToken := AToken;
+  finally
+    System.TMonitor.Exit(Self);
+  end;
+
+  // Check immediately if already cancelled
+  if Assigned(AToken) and AToken.IsCancelled then
+  begin
+    // If still pending, reject with cancellation
+    if State = psPending then
+    begin
+      Reject(TFailureReason.Create(EOperationCancelled.Create));
+    end;
+  end;
+
+  Result := Self;
+end;
+
+function TAbstractPromise<T>.IsCancelled: Boolean;
+begin
+  System.TMonitor.Enter(Self);
+  try
+    Result := Assigned(FToken) and FToken.IsCancelled;
+  finally
+    System.TMonitor.Exit(Self);
+  end;
+end;
+
+function TAbstractPromise<T>.OnCancelled(AProc: TProc): IPromise<T>;
+begin
+  Result := Self.Catch(
+    function(E: Exception): T
+    begin
+      if E is EOperationCancelled then
+      begin
+        AProc();
+        raise E;
+      end
+      else
+        raise E;
+    end);
+end;
+
+function TAbstractPromise<T>.Timeout(AMilliseconds: Cardinal; const AMessage: string): IPromise<T>;
+var
+  LTimeoutPromise: IPromise<T>;
+begin
+  LTimeoutPromise := Promise.Resolve<T>(
+    function: T
+    begin
+      Sleep(AMilliseconds);
+      raise ETimeoutException.Create(AMessage);
+    end);
+
+  Result := Promise.Race<T>([IPromise<T>(Self), LTimeoutPromise]);
+end;
+
 function TAbstractPromise<T>.Await: T;
 begin
   InternalWait;
@@ -403,6 +529,9 @@ begin
   Result := TPromise<T, T>.Create(function(const AIn: T): T begin
     Result := AIn end
     , AFunc, Self, TDisposeValue.dvFree);
+  // Propagate cancellation token
+  if Assigned(FToken) then
+    (Result as TAbstractPromise<T>).FToken := FToken;
   _Scheduler.Schedule(Result);
 end;
 
@@ -422,9 +551,13 @@ begin
         Result := AFunc(E);
       end,
     Self);
+  if Assigned(FToken) then
+    (LFirst as TAbstractPromise<IPromiseAccess>).FToken := FToken;
   _Scheduler.Schedule(LFirst);
 
   Result := TPromiseInPromise<T, T>.Create(LFirst, TDisposeValue.dvFree);
+  if Assigned(FToken) then
+    (Result as TAbstractPromise<T>).FToken := FToken;
   _Scheduler.Schedule(Result);
 end;
 
@@ -630,15 +763,23 @@ begin
       Result := AFunc(A);
     end,
     nil, Self);
+  // Propagate cancellation token to chained promises
+  if Assigned(FToken) then
+    (LFirst as TAbstractPromise<IPromiseAccess>).FToken := FToken;
   _Scheduler.Schedule(LFirst);
 
   Result := TPromiseInPromise<T, T>.Create(LFirst, ADispose);
+  if Assigned(FToken) then
+    (Result as TAbstractPromise<T>).FToken := FToken;
   _Scheduler.Schedule(Result);
 end;
 
 function TAbstractPromise<T>.ThenBy(AFunc: TConstFunc<T, T>; ADispose: TDisposeValue = TDisposeValue.dvFree): IPromise<T>;
 begin
   Result := TPromise<T, T>.Create(AFunc, nil, Self, ADispose);
+  // Propagate cancellation token to chained promises
+  if Assigned(FToken) then
+    (Result as TAbstractPromise<T>).FToken := FToken;
   _Scheduler.Schedule(Result);
 end;
 
@@ -773,6 +914,177 @@ begin
   _Scheduler.Schedule(Result);
 end;
 
+class function Promise.Race<T>(const APromises: TArray<IPromise<T>>): IPromise<T>;
+var
+  LSettled: Integer;
+  LOuterPromise: IPromise<T>;
+  i: Integer;
+begin
+  if Length(APromises) = 0 then
+  begin
+    Result := Promise.Reject<T>(EArgumentException.Create('Promise.Race requires at least one promise'));
+    Exit;
+  end;
+
+  LSettled := 0;
+
+  Result := Promise.New<T>(procedure(AResolve: TProc<T>; AReject: TProc<Exception>)
+    begin
+      // Capture resolve/reject via closure through the outer promise variable
+    end);
+
+  LOuterPromise := Result;
+
+  for i := Low(APromises) to High(APromises) do
+  begin
+    APromises[i].ThenBy(
+      function(const AValue: T): T
+      begin
+        if TInterlocked.CompareExchange(LSettled, 1, 0) = 0 then
+        begin
+          // Winner: transfer value ownership to the outer promise
+          TFirstPromise<T>(LOuterPromise).Resolve(AValue);
+        end
+        else
+        begin
+          // Loser: manually dispose value that won't be used
+          var LTemp: TDisposableValue<T> := AValue;
+          LTemp.Dispose;
+        end;
+        // Don't hold the value in the internal chain to prevent double-free
+        Result := Default(T);
+      end, TDisposeValue.dvKeep)
+    .Catch(
+      procedure(E: Exception)
+      var
+        LClone: Exception;
+      begin
+        if TInterlocked.CompareExchange(LSettled, 1, 0) = 0 then
+        begin
+          // Clone the exception since E is owned by the original promise's IFailureReason
+          LClone := E.ClassType.Create as Exception;
+          LClone.Message := E.Message;
+          TFirstPromise<T>(LOuterPromise).Reject(TFailureReason.Create(LClone));
+        end;
+      end);
+  end;
+end;
+
+class function Promise.Any<T>(const APromises: TArray<IPromise<T>>): IPromise<T>;
+var
+  LResolved: Integer;
+  LRejectionCount: Integer;
+  LTotalCount: Integer;
+  LExceptions: TArray<Exception>;
+  LLock: TCriticalSection;
+  LOuterPromise: IPromise<T>;
+  i: Integer;
+begin
+  if Length(APromises) = 0 then
+  begin
+    Result := Promise.Reject<T>(EArgumentException.Create('Promise.Any requires at least one promise'));
+    Exit;
+  end;
+
+  LResolved := 0;
+  LRejectionCount := 0;
+  LTotalCount := Length(APromises);
+  SetLength(LExceptions, LTotalCount);
+  LLock := TCriticalSection.Create;
+
+  Result := Promise.New<T>(procedure(AResolve: TProc<T>; AReject: TProc<Exception>)
+    begin
+      // Capture via closure
+    end);
+
+  LOuterPromise := Result;
+
+  for i := Low(APromises) to High(APromises) do
+  begin
+    APromises[i].ThenBy(
+      function(const AValue: T): T
+      begin
+        Result := AValue;
+        if TInterlocked.CompareExchange(LResolved, 1, 0) = 0 then
+          TFirstPromise<T>(LOuterPromise).Resolve(AValue);
+      end)
+    .Catch(
+      procedure(E: Exception)
+      var
+        LCount: Integer;
+        LClone: Exception;
+      begin
+        // Clone the exception since it's owned by the promise's IFailureReason
+        LClone := E.ClassType.Create as Exception;
+        LClone.Message := E.Message;
+
+        LLock.Enter;
+        try
+          LExceptions[LRejectionCount] := LClone;
+          Inc(LRejectionCount);
+          LCount := LRejectionCount;
+        finally
+          LLock.Leave;
+        end;
+
+        if LCount = LTotalCount then
+        begin
+          if TInterlocked.CompareExchange(LResolved, 1, 0) = 0 then
+          begin
+            // All rejected - create aggregate exception
+            // Transfer ownership of cloned exceptions to EAggregateException
+            TFirstPromise<T>(LOuterPromise).Reject(
+              TFailureReason.Create(EAggregateException.Create(LExceptions)));
+          end;
+        end;
+      end);
+  end;
+end;
+
+class function Promise.AllSettled<T>(const APromises: TArray<IPromise<T>>): IPromise<TArray<TPromiseSettledResult<T>>>;
+var
+  LCount: Integer;
+begin
+  LCount := Length(APromises);
+
+  if LCount = 0 then
+  begin
+    Result := Promise.Resolve<TArray<TPromiseSettledResult<T>>>(
+      function: TArray<TPromiseSettledResult<T>>
+      begin
+        SetLength(Result, 0);
+      end);
+    Exit;
+  end;
+
+  Result := TFirstPromise<TArray<TPromiseSettledResult<T>>>.Create(
+    function: TArray<TPromiseSettledResult<T>>
+    var
+      i: Integer;
+      LResult: TPromiseSettledResult<T>;
+    begin
+      SetLength(Result, LCount);
+      for i := 0 to LCount - 1 do
+      begin
+        APromises[i].InternalWait;
+        if APromises[i].State = psFullfilled then
+        begin
+          LResult.Status := TPromiseStatus.psResolved;
+          LResult.Value := APromises[i].Await;
+          LResult.Error := nil;
+        end
+        else
+        begin
+          LResult.Status := TPromiseStatus.psRejected;
+          LResult.Value := Default(T);
+          LResult.Error := APromises[i].GetFailure.Reason;
+        end;
+        Result[i] := LResult;
+      end;
+    end);
+  _Scheduler.Schedule(Result);
+end;
+
 { TPromise<T, T2> }
 
 constructor TPromise<T, T2>.Create(AFunc: TConstFunc<T, T2>;
@@ -795,6 +1107,15 @@ end;
 
 procedure TPromise<T, T2>.Execute;
 begin
+  // Check cancellation token before executing this step in the chain
+  if Assigned(FToken) and FToken.IsCancelled then
+  begin
+    Reject(TFailureReason.Create(EOperationCancelled.Create));
+    FCatchFunc := nil;
+    FFunc := nil;
+    Exit;
+  end;
+
   if GetPreviousPromiseState = psRejected then begin
     if Assigned(FCatchFunc) then
       InternalExecute(function: TDisposableValue<T2>
